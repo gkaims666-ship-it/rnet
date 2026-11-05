@@ -43,12 +43,13 @@ object ServerPrefs {
     private const val KEY_RESILIENT_CORE = "use_resilient_core"
 
     /**
-     * Returns true when the user has opted in to routing via the Psiphon
-     * decentralized network. Default: false (opt-in, never automatic).
+     * Returns true when Psiphon resilient routing is enabled.
+     * Default: true — Psiphon is ON out-of-the-box for zero-config emergency use.
+     * The user may disable it from the Dashboard toggle.
      */
     fun useResilientCore(ctx: Context): Boolean =
         ctx.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
-           .getBoolean(KEY_RESILIENT_CORE, false)
+           .getBoolean(KEY_RESILIENT_CORE, true)
 
     fun setUseResilientCore(ctx: Context, enabled: Boolean) {
         ctx.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE).edit()

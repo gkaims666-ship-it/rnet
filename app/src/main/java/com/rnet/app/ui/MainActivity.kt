@@ -48,12 +48,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Redirect to onboarding if no relay server has been configured yet
-        if (ServerSetupActivity.shouldShow(this)) {
-            startActivity(Intent(this, ServerSetupActivity::class.java))
-            finish()
-            return
-        }
+        // Setup screen bypassed: app boots directly to Dashboard on first launch.
+        // Zero-configuration emergency-launch mode — no relay setup required.
 
         // Request minimum required permissions on first launch
         val permissions = buildList {

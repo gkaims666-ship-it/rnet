@@ -130,12 +130,37 @@ class RnetForegroundService : Service() {
                 }
             }
         } else {
-            // Standard mode: connect directly to the user-configured relay
+            // Standard mode: connect to user-configured relay.
+            // If relay host is blank or still the default placeholder, bypass
+            // private relay entirely and fall through to Psiphon as primary upstream.
             val relayHost = ServerPrefs.getHost(this)
             val relayPort = ServerPrefs.getPort(this)
-            engine.start(relayHost, relayPort)
-            engineStarted = true
-            updateNotification()
+            val isBlankOrPlaceholder = relayHost.isBlank() ||
+                relayHost == "relay.example.com" ||
+                relayHost.endsWith(".example.com")
+
+            if (isBlankOrPlaceholder) {
+                // No relay configured — start Psiphon immediately as primary upstream
+                engineStarted = true
+                updateNotification()
+                serviceScope.launch {
+                    try {
+                        val psiphonTransport = PsiphonTransport(this@RnetForegroundService)
+                        psiphon = psiphonTransport
+                        val proxyAddress = psiphonTransport.start()
+                        val port = proxyAddress.substringAfterLast(":").toIntOrNull() ?: 1080
+                        engine.setUpstreamSocksProxy("127.0.0.1", port)
+                        engine.startSocksPassthrough("127.0.0.1", port)
+                    } catch (e: Exception) {
+                        android.util.Log.e("RnetForegroundService",
+                            "Psiphon fallback start failed: ${e.message}")
+                    }
+                }
+            } else {
+                engine.start(relayHost, relayPort)
+                engineStarted = true
+                updateNotification()
+            }
         }
     }
 
