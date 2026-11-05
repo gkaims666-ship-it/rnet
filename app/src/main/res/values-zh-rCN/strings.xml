@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RNET</string>
+    <string name="engine_title">多路径传输</string>
+    <string name="engine_status_active">活跃 — 多路径QUIC运行中</string>
+    <string name="engine_status_inactive">未激活</string>
+    <string name="telemetry_title">链路遥测</string>
+    <string name="metric_snr">信号质量（信噪比）</string>
+    <string name="metric_pdr">数据包传输率</string>
+    <string name="metric_technology">无线技术</string>
+    <string name="metric_stations">活跃站点</string>
+    <string name="metric_bytes_in">已接收数据</string>
+    <string name="metric_bytes_out">已发送数据</string>
+    <string name="gateway_title">热点网关</string>
+    <string name="gateway_subtitle">通过RNET路由连接的客户端</string>
+    <string name="gateway_consent_required">需要同意披露 — 点击查看</string>
+    <string name="consent_title">热点网关 — 信息披露</string>
+    <string name="consent_body_1">启用热点网关后，此Android设备将作为连接到其Wi-Fi热点
+        的设备的网络路由器。</string>
+    <string name="consent_body_2">连接设备的网络流量将通过RNET加密多路径传输转发到配置的
+        服务器端点。连接设备无需任何额外软件。</string>
+    <string name="consent_body_3">非识别性流量统计信息（字节数、延迟、连接设备数）仅在
+        本设备本地记录，不会传输给任何第三方。不检查通信内容。</string>
+    <string name="consent_highlight">您可以随时使用主屏幕上的开关禁用网关。</string>
+    <string name="consent_accept">我明白 — 启用网关</string>
+    <string name="consent_decline">取消</string>
+
+    <!-- Mesh consent dialog -->
+    <string name="mesh_consent_route_title">通过对等节点路由流量？</string>
+    <string name="mesh_consent_route_body">RNET将通过附近设备「%1$s」转发您的网络流量，该设备具有
+        活跃的互联网连接。所有流量保持端到端加密。您可以随时停止此操作。</string>
+    <string name="mesh_consent_gateway_title">充当网状网关？</string>
+    <string name="mesh_consent_gateway_body">RNET将允许网状集群中的附近设备通过此设备的互联网
+        连接路由其流量。所有中继流量均已加密。您可以随时禁用此功能。</string>
+    <string name="mesh_consent_note">不检查任何流量内容。仅在本地记录汇总字节计数和延迟。</string>
+    <string name="mesh_consent_accept">允许</string>
+    <string name="mesh_consent_decline">拒绝</string>
+    <string name="mesh_unknown_peer">未知节点</string>
+
+    <!-- Mesh UI labels -->
+    <string name="mesh_title">自组织网状网络</string>
+    <string name="mesh_peers_found">发现 %1$d 个节点</string>
+    <string name="mesh_no_peers">正在扫描节点…</string>
+    <string name="mesh_connected_via">通过 %1$s 路由</string>
+    <string name="mesh_gateway_active">正在充当网状网关</string>
+
+    <!-- Notification -->
+    <string name="notif_title">RNET传输</string>
+    <string name="notif_stop">停止</string>
+</resources>

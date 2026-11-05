@@ -1,0 +1,54 @@
+[versions]
+agp                     = "8.5.2"
+kotlin                  = "2.0.21"
+coreKtx                 = "1.13.1"
+lifecycle               = "2.8.6"
+activityCompose         = "1.9.2"
+composeBom              = "2024.09.03"
+coroutines              = "1.9.0"
+bouncycastle            = "1.78.1"
+junit                   = "4.13.2"
+junitExt                = "1.2.1"
+espresso                = "3.6.1"
+
+[libraries]
+# AndroidX core
+androidx-core-ktx                   = { group = "androidx.core",         name = "core-ktx",                    version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx      = { group = "androidx.lifecycle",    name = "lifecycle-runtime-ktx",       version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose= { group = "androidx.lifecycle",    name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-activity-compose           = { group = "androidx.activity",     name = "activity-compose",            version.ref = "activityCompose" }
+
+# Compose BOM + components
+androidx-compose-bom                = { group = "androidx.compose",      name = "compose-bom",                 version.ref = "composeBom" }
+androidx-ui                         = { group = "androidx.compose.ui",   name = "ui" }
+androidx-ui-graphics                = { group = "androidx.compose.ui",   name = "ui-graphics" }
+androidx-ui-tooling-preview         = { group = "androidx.compose.ui",   name = "ui-tooling-preview" }
+androidx-material3                  = { group = "androidx.compose.material3", name = "material3" }
+
+# Coroutines
+kotlinx-coroutines-android          = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android",  version.ref = "coroutines" }
+
+# Bouncy Castle PQC
+bouncycastle-bcprov                 = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+bouncycastle-bcpkix                 = { group = "org.bouncycastle", name = "bcpkix-jdk18on", version.ref = "bouncycastle" }
+
+# Test
+junit                               = { group = "junit",                 name = "junit",                        version.ref = "junit" }
+androidx-junit                      = { group = "androidx.test.ext",     name = "junit",                        version.ref = "junitExt" }
+androidx-espresso-core              = { group = "androidx.test.espresso",name = "espresso-core",                version.ref = "espresso" }
+androidx-ui-test-junit4             = { group = "androidx.compose.ui",   name = "ui-test-junit4" }
+androidx-ui-tooling                 = { group = "androidx.compose.ui",   name = "ui-tooling" }
+androidx-ui-test-manifest           = { group = "androidx.compose.ui",   name = "ui-test-manifest" }
+
+# Coroutines core (commonMain for KMP)
+kotlinx-coroutines-core             = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
+
+# Convenience alias used in shared/build.gradle.kts
+bcprov                              = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+
+[plugins]
+android-application                 = { id = "com.android.application",          version.ref = "agp" }
+android-library                     = { id = "com.android.library",              version.ref = "agp" }
+kotlin-android                      = { id = "org.jetbrains.kotlin.android",     version.ref = "kotlin" }
+kotlin-compose                      = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlinMultiplatform                 = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

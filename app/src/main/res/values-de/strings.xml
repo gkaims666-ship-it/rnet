@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RNET</string>
+    <string name="engine_title">Mehrpfad-Transport</string>
+    <string name="engine_status_active">Aktiv — Mehrpfad-QUIC läuft</string>
+    <string name="engine_status_inactive">Inaktiv</string>
+    <string name="telemetry_title">Verbindungs-Telemetrie</string>
+    <string name="metric_snr">Signalqualität (SNR)</string>
+    <string name="metric_pdr">Paketvermittlungsrate</string>
+    <string name="metric_technology">Funktechnologie</string>
+    <string name="metric_stations">Aktive Stationen</string>
+    <string name="metric_bytes_in">Empfangene Daten</string>
+    <string name="metric_bytes_out">Gesendete Daten</string>
+    <string name="gateway_title">Hotspot-Gateway</string>
+    <string name="gateway_subtitle">Verbundene Clients über RNET weiterleiten</string>
+    <string name="gateway_consent_required">Zustimmung erforderlich — Tippen zum Überprüfen</string>
+    <string name="consent_title">Hotspot-Gateway — Offenlegung</string>
+    <string name="consent_body_1">Wenn das Hotspot-Gateway aktiviert ist, fungiert dieses
+        Android-Gerät als Netzwerk-Router für Geräte, die mit seinem WLAN-Hotspot verbunden sind.</string>
+    <string name="consent_body_2">Der Netzwerkverkehr verbundener Geräte wird über den
+        verschlüsselten Mehrpfad-Transport von RNET an den konfigurierten Server weitergeleitet.
+        Auf den verbundenen Geräten ist keine zusätzliche Software erforderlich.</string>
+    <string name="consent_body_3">Nicht-identifizierende Verkehrsstatistiken werden lokal
+        gespeichert und nicht an Dritte übertragen. Der Inhalt der Kommunikation wird nicht
+        überprüft.</string>
+    <string name="consent_highlight">Sie können das Gateway jederzeit über den Schalter auf
+        dem Hauptbildschirm deaktivieren.</string>
+    <string name="consent_accept">Ich verstehe — Gateway aktivieren</string>
+    <string name="consent_decline">Abbrechen</string>
+    <string name="mesh_consent_route_title">Datenverkehr über Peer weiterleiten?</string>
+    <string name="mesh_consent_route_body">RNET leitet Ihren Netzwerkverkehr über das Gerät
+        „%1$s" in der Nähe weiter, das eine aktive Internetverbindung hat. Aller Verkehr bleibt
+        Ende-zu-Ende verschlüsselt.</string>
+    <string name="mesh_consent_gateway_title">Als Mesh-Gateway fungieren?</string>
+    <string name="mesh_consent_gateway_body">RNET ermöglicht benachbarten Geräten im Mesh-Cluster,
+        ihren Datenverkehr über die Internetverbindung dieses Geräts zu leiten.</string>
+    <string name="mesh_consent_note">Kein Datenverkehrsinhalt wird überprüft. Nur aggregierte
+        Bytezähler und Latenz werden lokal gespeichert.</string>
+    <string name="mesh_consent_accept">Erlauben</string>
+    <string name="mesh_consent_decline">Ablehnen</string>
+    <string name="mesh_unknown_peer">Unbekannter Peer</string>
+    <string name="mesh_title">Ad-hoc-Mesh-Netzwerk</string>
+    <string name="mesh_peers_found">%1$d Peer(s) entdeckt</string>
+    <string name="mesh_no_peers">Suche nach Peers…</string>
+    <string name="mesh_connected_via">Weiterleitung über %1$s</string>
+    <string name="mesh_gateway_active">Fungiert als Mesh-Gateway</string>
+    <string name="notif_title">RNET-Transport</string>
+    <string name="notif_stop">Stoppen</string>
+</resources>

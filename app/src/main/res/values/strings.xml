@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">RNET</string>
+
+    <!-- Engine card -->
+    <string name="engine_title">Multi-Path Transport</string>
+    <string name="engine_status_active">Active — multi-path QUIC running</string>
+    <string name="engine_status_inactive">Inactive</string>
+
+    <!-- Telemetry card -->
+    <string name="telemetry_title">Link Telemetry</string>
+    <string name="metric_snr">Signal Quality (SNR)</string>
+    <string name="metric_pdr">Packet Delivery Rate</string>
+    <string name="metric_technology">Radio Technology</string>
+    <string name="metric_stations">Active Stations</string>
+    <string name="metric_bytes_in">Data Received</string>
+    <string name="metric_bytes_out">Data Sent</string>
+
+    <!-- Gateway card -->
+    <string name="gateway_title">Hotspot Gateway</string>
+    <string name="gateway_subtitle">Route tethered clients through RNET</string>
+    <string name="gateway_consent_required">Requires disclosure acceptance — tap to review</string>
+
+    <!-- Consent screen -->
+    <string name="consent_title">Hotspot Gateway — Disclosure</string>
+    <string name="consent_body_1">When the Hotspot Gateway is enabled, this Android device will
+        act as a network router for devices connected to its Wi-Fi hotspot.</string>
+    <string name="consent_body_2">Network traffic from connected devices (phones, laptops, smart
+        TVs) will be forwarded through RNET\'s encrypted multi-path transport to the configured
+        server endpoint. Connected devices do not need any additional software.</string>
+    <string name="consent_body_3">Non-identifying traffic statistics (byte counts, latency,
+        connected device count) are logged locally on this device for bandwidth management and
+        are not transmitted to any third party. No content of communications is inspected.</string>
+    <string name="consent_highlight">You can disable the Gateway at any time using the toggle on
+        the main screen. All routing will stop immediately when you do so.</string>
+    <string name="consent_accept">I Understand — Enable Gateway</string>
+    <string name="consent_decline">Cancel</string>
+
+    <!-- Mesh consent dialog -->
+    <string name="mesh_consent_route_title">Route Traffic Through Peer?</string>
+    <string name="mesh_consent_route_body">RNET will forward your network traffic through the
+        nearby device "%1$s", which has an active internet connection. All traffic remains
+        encrypted end-to-end. You can stop this at any time.</string>
+    <string name="mesh_consent_gateway_title">Act as Mesh Gateway?</string>
+    <string name="mesh_consent_gateway_body">RNET will allow nearby devices in the local mesh
+        cluster to route their traffic through this device\'s internet connection. All relayed
+        traffic is encrypted. You can disable this at any time.</string>
+    <string name="mesh_consent_note">No traffic content is inspected. Only aggregate byte counts
+        and latency are logged locally for bandwidth management.</string>
+    <string name="mesh_consent_accept">Allow</string>
+    <string name="mesh_consent_decline">Deny</string>
+    <string name="mesh_unknown_peer">Unknown Peer</string>
+
+    <!-- Mesh UI labels -->
+    <string name="mesh_title">Ad-Hoc Mesh</string>
+    <string name="mesh_peers_found">%1$d peer(s) discovered</string>
+    <string name="mesh_no_peers">Scanning for peers…</string>
+    <string name="mesh_connected_via">Routing via %1$s</string>
+    <string name="mesh_gateway_active">Acting as mesh gateway</string>
+
+    <!-- Notification -->
+    <string name="notif_title">RNET Transport</string>
+    <string name="notif_stop">Stop</string>
+</resources>

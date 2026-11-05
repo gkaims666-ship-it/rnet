@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RNET</string>
+    <string name="engine_title">انتقال چندمسیره</string>
+    <string name="engine_status_active">فعال — QUIC چندمسیره در حال اجرا</string>
+    <string name="engine_status_inactive">غیرفعال</string>
+    <string name="telemetry_title">تله‌متری پیوند</string>
+    <string name="metric_snr">کیفیت سیگنال (SNR)</string>
+    <string name="metric_pdr">نرخ تحویل بسته</string>
+    <string name="metric_technology">فناوری رادیویی</string>
+    <string name="metric_stations">ایستگاه‌های فعال</string>
+    <string name="metric_bytes_in">داده دریافت‌شده</string>
+    <string name="metric_bytes_out">داده ارسال‌شده</string>
+    <string name="gateway_title">دروازه هات‌اسپات</string>
+    <string name="gateway_subtitle">مسیریابی کلاینت‌های متصل از طریق RNET</string>
+    <string name="gateway_consent_required">نیاز به تأیید افشای اطلاعات — برای بررسی ضربه بزنید</string>
+    <string name="consent_title">دروازه هات‌اسپات — افشای اطلاعات</string>
+    <string name="consent_body_1">وقتی دروازه هات‌اسپات فعال است، این دستگاه اندرویدی
+        به عنوان روتر شبکه برای دستگاه‌های متصل به هات‌اسپات Wi-Fi آن عمل می‌کند.</string>
+    <string name="consent_body_2">ترافیک شبکه دستگاه‌های متصل از طریق انتقال چندمسیره رمزگذاری‌شده
+        RNET به سرور پیکربندی‌شده ارسال می‌شود. نیازی به نرم‌افزار اضافی روی دستگاه‌های متصل نیست.</string>
+    <string name="consent_body_3">آمار غیرشناسا (تعداد بایت، تأخیر، تعداد دستگاه‌های متصل) به
+        صورت محلی ذخیره می‌شود و به هیچ طرف ثالثی منتقل نمی‌شود.</string>
+    <string name="consent_highlight">می‌توانید در هر زمان با استفاده از کلید در صفحه اصلی
+        دروازه را غیرفعال کنید.</string>
+    <string name="consent_accept">می‌فهمم — دروازه را فعال کن</string>
+    <string name="consent_decline">لغو</string>
+
+    <!-- Mesh consent dialog -->
+    <string name="mesh_consent_route_title">مسیریابی ترافیک از طریق همتا؟</string>
+    <string name="mesh_consent_route_body">RNET ترافیک شبکه شما را از طریق دستگاه نزدیک
+        «%1$s» که اتصال اینترنت فعال دارد ارسال می‌کند. تمام ترافیک سرتاسر رمزگذاری
+        شده باقی می‌ماند. می‌توانید در هر زمان این را متوقف کنید.</string>
+    <string name="mesh_consent_gateway_title">به عنوان دروازه مش عمل کنید؟</string>
+    <string name="mesh_consent_gateway_body">RNET به دستگاه‌های مجاور در خوشه مش اجازه
+        می‌دهد ترافیک خود را از طریق اتصال اینترنت این دستگاه مسیریابی کنند. تمام ترافیک
+        منتقل‌شده رمزگذاری شده است.</string>
+    <string name="mesh_consent_note">هیچ محتوای ترافیکی بازرسی نمی‌شود. تنها شمارش کل بایت‌ها
+        و تأخیر به صورت محلی ذخیره می‌شود.</string>
+    <string name="mesh_consent_accept">اجازه دادن</string>
+    <string name="mesh_consent_decline">رد کردن</string>
+    <string name="mesh_unknown_peer">همتای ناشناس</string>
+
+    <!-- Mesh UI labels -->
+    <string name="mesh_title">شبکه مش موقت</string>
+    <string name="mesh_peers_found">%1$d همتا کشف شد</string>
+    <string name="mesh_no_peers">در حال جستجوی همتاها…</string>
+    <string name="mesh_connected_via">مسیریابی از طریق %1$s</string>
+    <string name="mesh_gateway_active">در حال عمل به عنوان دروازه مش</string>
+
+    <!-- Notification -->
+    <string name="notif_title">انتقال RNET</string>
+    <string name="notif_stop">توقف</string>
+</resources>

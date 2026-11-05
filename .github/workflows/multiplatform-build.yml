@@ -1,0 +1,277 @@
+name: Multiplatform Build
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags:     [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job dependency graph:
+#
+#   test-android ──┐
+#                  ├──► build-android ──┐
+#   test-ios ──────┘                    ├──► github-release  (tags only)
+#                  ├──► build-ios ──────┘
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+
+  # ───────────────────────────── Android unit tests ─────────────────────────
+  test-android:
+    name: Android Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest :shared:testDebugUnitTest --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-test-results
+          path: '**/build/reports/tests/'
+
+  # ───────────────────────────── Android release build ──────────────────────
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    needs: test-android
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # ---- Debug build (PRs + develop) ----
+      - name: Build debug APK
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/develop'
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      # ---- Release build (main + tags) ----
+      - name: Decode keystore
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+
+      - name: Build release APK
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        env:
+          KEYSTORE_PATH:     ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+
+  # ───────────────────────────── iOS build ──────────────────────────────────
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-14          # Apple Silicon runner; Xcode 15.4 pre-installed
+    needs: test-android        # parallel with Android build after tests pass
+
+    env:
+      SCHEME:        RnetApp
+      WORKSPACE:     iosApp/RnetApp.xcworkspace
+      # For Ad-Hoc / Developer Mode export — no App Store Connect upload
+      EXPORT_METHOD: ad-hoc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- Xcode version pin ----
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      # ---- Build shared KMP framework first (needs Gradle) ----
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build RnetShared.xcframework
+        run: |
+          ./gradlew :shared:assembleReleaseXCFramework --no-daemon
+          # Output: shared/build/XCFrameworks/release/RnetShared.xcframework
+
+      # ---- Codesigning setup ----
+      - name: Import code-signing certificate
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        env:
+          P12_BASE64:       ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
+          P12_PASSWORD:     ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+          PROVISIONING_B64: ${{ secrets.IOS_ADHOC_PROVISIONING_BASE64 }}
+        run: |
+          # Create a temporary keychain
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          security create-keychain -p "ci" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "ci" "$KEYCHAIN"
+          security set-keychain-settings -t 3600 "$KEYCHAIN"
+
+          # Import certificate
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" \
+            -P "$P12_PASSWORD" -A -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "ci" "$KEYCHAIN"
+
+          # Install provisioning profile
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$PROVISIONING_B64" | base64 --decode \
+            > "$HOME/Library/MobileDevice/Provisioning Profiles/adhoc.mobileprovision"
+
+      # ---- Archive (signed, for release tags) ----
+      - name: Archive (release)
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        run: |
+          xcodebuild archive \
+            -workspace "$WORKSPACE" \
+            -scheme    "$SCHEME" \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/RnetApp.xcarchive" \
+            -configuration Release \
+            CODE_SIGN_STYLE=Manual \
+            | xcpretty
+
+      # ---- Export IPA (Ad-Hoc) ----
+      - name: Export IPA (Ad-Hoc)
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>            <string>ad-hoc</string>
+            <key>teamID</key>            <string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>compileBitcode</key>    <false/>
+            <key>thinning</key>          <string>&lt;none&gt;</string>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/RnetApp.xcarchive" \
+            -exportPath  "$RUNNER_TEMP/ipa" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            | xcpretty
+
+      # ---- Build without signing (PRs / simulate) ----
+      - name: Build unsigned (simulator — PRs)
+        if: github.event_name == 'pull_request'
+        run: |
+          xcodebuild build \
+            -workspace "$WORKSPACE" \
+            -scheme    "$SCHEME" \
+            -destination "platform=iOS Simulator,name=iPhone 15 Pro" \
+            -configuration Debug \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO \
+            | xcpretty
+
+      - name: Upload iOS IPA artifact
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: ${{ runner.temp }}/ipa/*.ipa
+
+  # ───────────────────────────── GitHub Release ─────────────────────────────
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [ build-android, build-ios ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Android APK
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: dist/android
+
+      - name: Download iOS IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-ipa
+          path: dist/ios
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            NOTES=$(git log --pretty="- %s (%h)" "${PREV_TAG}..HEAD")
+          else
+            NOTES=$(git log --pretty="- %s (%h)" HEAD)
+          fi
+          echo "NOTES<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES"    >> $GITHUB_OUTPUT
+          echo "EOF"       >> $GITHUB_OUTPUT
+
+      - name: Determine pre-release
+        id: prerelease
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if echo "$TAG" | grep -qE '-(alpha|beta|rc)'; then
+            echo "IS_PRE=true" >> $GITHUB_OUTPUT
+          else
+            echo "IS_PRE=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name:       "RNET ${{ github.ref_name }}"
+          prerelease: ${{ steps.prerelease.outputs.IS_PRE }}
+          body: |
+            ## What's Changed
+            ${{ steps.changelog.outputs.NOTES }}
+
+            ---
+            ### Installation
+
+            **Android:** Download `rnet-release.apk` and sideload via `adb install rnet-release.apk`
+            or enable *Install unknown apps* for your file manager.
+
+            **iOS (Ad-Hoc):** Download `RnetApp.ipa`.
+            Install via [AltStore](https://altstore.io/) (open-source sideloading tool that
+            re-signs apps with your personal Apple ID certificate — no jailbreak required) or
+            with [Apple Configurator 2](https://support.apple.com/guide/apple-configurator-mac/welcome/mac)
+            on a registered development device.
+            Developer Mode sideloading: `ideviceinstaller -i RnetApp.ipa`
+            (requires [libimobiledevice](https://libimobiledevice.org/)).
+          files: |
+            dist/android/**/*.apk
+            dist/ios/**/*.ipa
+          token: ${{ secrets.GITHUB_TOKEN }}

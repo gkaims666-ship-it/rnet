@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RNET</string>
+    <string name="engine_title">Transporte Multiruta</string>
+    <string name="engine_status_active">Activo — QUIC multiruta en ejecución</string>
+    <string name="engine_status_inactive">Inactivo</string>
+    <string name="telemetry_title">Telemetría de Enlace</string>
+    <string name="metric_snr">Calidad de señal (SNR)</string>
+    <string name="metric_pdr">Tasa de entrega de paquetes</string>
+    <string name="metric_technology">Tecnología de radio</string>
+    <string name="metric_stations">Estaciones activas</string>
+    <string name="metric_bytes_in">Datos recibidos</string>
+    <string name="metric_bytes_out">Datos enviados</string>
+    <string name="gateway_title">Puerta de enlace Hotspot</string>
+    <string name="gateway_subtitle">Enrutar clientes conectados a través de RNET</string>
+    <string name="gateway_consent_required">Requiere aceptación de divulgación — toca para revisar</string>
+    <string name="consent_title">Puerta de enlace Hotspot — Divulgación</string>
+    <string name="consent_body_1">Cuando la puerta de enlace Hotspot está habilitada, este
+        dispositivo Android actuará como enrutador de red para los dispositivos conectados a su
+        punto de acceso Wi-Fi.</string>
+    <string name="consent_body_2">El tráfico de red de los dispositivos conectados se reenviará
+        a través del transporte multiruta cifrado de RNET al punto final del servidor configurado.
+        Los dispositivos conectados no necesitan software adicional.</string>
+    <string name="consent_body_3">Las estadísticas de tráfico no identificativas se registran
+        localmente y no se transmiten a terceros. El contenido de las comunicaciones no se
+        inspecciona.</string>
+    <string name="consent_highlight">Puede deshabilitar la puerta de enlace en cualquier momento
+        usando el interruptor en la pantalla principal.</string>
+    <string name="consent_accept">Entiendo — Habilitar puerta de enlace</string>
+    <string name="consent_decline">Cancelar</string>
+
+    <!-- Mesh consent dialog -->
+    <string name="mesh_consent_route_title">¿Enrutar tráfico a través del par?</string>
+    <string name="mesh_consent_route_body">RNET enviará su tráfico de red a través del
+        dispositivo cercano «%1$s», que tiene una conexión a internet activa. Todo el tráfico
+        permanece cifrado de extremo a extremo. Puede detener esto en cualquier momento.</string>
+    <string name="mesh_consent_gateway_title">¿Actuar como puerta de enlace de malla?</string>
+    <string name="mesh_consent_gateway_body">RNET permitirá que los dispositivos cercanos del
+        clúster de malla enruten su tráfico a través de la conexión a internet de este dispositivo.
+        Todo el tráfico retransmitido está cifrado. Puede desactivarlo en cualquier momento.</string>
+    <string name="mesh_consent_note">No se inspecciona ningún contenido de tráfico. Solo se
+        almacenan localmente recuentos de bytes agregados y latencia.</string>
+    <string name="mesh_consent_accept">Permitir</string>
+    <string name="mesh_consent_decline">Denegar</string>
+    <string name="mesh_unknown_peer">Par desconocido</string>
+
+    <!-- Mesh UI labels -->
+    <string name="mesh_title">Malla ad hoc</string>
+    <string name="mesh_peers_found">%1$d par(es) descubierto(s)</string>
+    <string name="mesh_no_peers">Buscando pares…</string>
+    <string name="mesh_connected_via">Enrutando a través de %1$s</string>
+    <string name="mesh_gateway_active">Actuando como puerta de enlace de malla</string>
+
+    <!-- Notification -->
+    <string name="notif_title">Transporte RNET</string>
+    <string name="notif_stop">Detener</string>
+</resources>

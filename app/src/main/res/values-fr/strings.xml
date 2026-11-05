@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RNET</string>
+    <string name="engine_title">Transport Multi-Chemin</string>
+    <string name="engine_status_active">Actif — QUIC multi-chemin en cours</string>
+    <string name="engine_status_inactive">Inactif</string>
+    <string name="telemetry_title">Télémétrie du lien</string>
+    <string name="metric_snr">Qualité du signal (SNR)</string>
+    <string name="metric_pdr">Taux de livraison des paquets</string>
+    <string name="metric_technology">Technologie radio</string>
+    <string name="metric_stations">Stations actives</string>
+    <string name="metric_bytes_in">Données reçues</string>
+    <string name="metric_bytes_out">Données envoyées</string>
+    <string name="gateway_title">Passerelle Hotspot</string>
+    <string name="gateway_subtitle">Acheminer les clients connectés via RNET</string>
+    <string name="gateway_consent_required">Acceptation requise — appuyez pour consulter</string>
+    <string name="consent_title">Passerelle Hotspot — Divulgation</string>
+    <string name="consent_body_1">Lorsque la passerelle Hotspot est activée, cet appareil Android
+        agit comme routeur réseau pour les appareils connectés à son point d\'accès Wi-Fi.</string>
+    <string name="consent_body_2">Le trafic réseau des appareils connectés sera transmis via le
+        transport multi-chemin chiffré de RNET vers le serveur configuré. Aucun logiciel
+        supplémentaire n\'est requis sur les appareils connectés.</string>
+    <string name="consent_body_3">Les statistiques de trafic non identifiantes sont enregistrées
+        localement et ne sont pas transmises à des tiers. Le contenu des communications n\'est
+        pas inspecté.</string>
+    <string name="consent_highlight">Vous pouvez désactiver la passerelle à tout moment en
+        utilisant le bouton sur l\'écran principal.</string>
+    <string name="consent_accept">Je comprends — Activer la passerelle</string>
+    <string name="consent_decline">Annuler</string>
+    <string name="mesh_consent_route_title">Acheminer le trafic via ce pair ?</string>
+    <string name="mesh_consent_route_body">RNET transmettra votre trafic réseau via l\'appareil
+        à proximité « %1$s », qui dispose d\'une connexion internet active. Tout le trafic
+        reste chiffré de bout en bout. Vous pouvez arrêter cela à tout moment.</string>
+    <string name="mesh_consent_gateway_title">Agir comme passerelle maillée ?</string>
+    <string name="mesh_consent_gateway_body">RNET permettra aux appareils voisins du cluster
+        maillé d\'acheminer leur trafic via la connexion internet de cet appareil. Tout le
+        trafic relayé est chiffré. Vous pouvez désactiver cela à tout moment.</string>
+    <string name="mesh_consent_note">Aucun contenu de trafic n\'est inspecté. Seuls les compteurs
+        d\'octets agrégés et la latence sont enregistrés localement.</string>
+    <string name="mesh_consent_accept">Autoriser</string>
+    <string name="mesh_consent_decline">Refuser</string>
+    <string name="mesh_unknown_peer">Pair inconnu</string>
+    <string name="mesh_title">Réseau maillé ad hoc</string>
+    <string name="mesh_peers_found">%1$d pair(s) découvert(s)</string>
+    <string name="mesh_no_peers">Recherche de pairs…</string>
+    <string name="mesh_connected_via">Acheminement via %1$s</string>
+    <string name="mesh_gateway_active">Agit comme passerelle maillée</string>
+    <string name="notif_title">Transport RNET</string>
+    <string name="notif_stop">Arrêter</string>
+</resources>

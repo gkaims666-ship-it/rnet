@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for MultipeerConnectivity local network peer discovery -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>RNET uses the local network to discover and connect to nearby mesh peers for resilient transport relay.</string>
+
+    <!-- Required for Bonjour service browsing (MultipeerConnectivity uses _rnet-mesh._tcp) -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_rnet-mesh._tcp</string>
+        <string>_rnet-mesh._udp</string>
+    </array>
+
+    <!-- Background networking: keep NWConnection alive when app is backgrounded -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>network-authentication</string>
+        <string>voip</string>
+    </array>
+
+    <!-- Multipath TCP entitlement (requires Apple Developer approval for App Store;
+         not required for Ad-Hoc / Developer Mode distribution) -->
+    <!-- Note: com.apple.developer.networking.multipath entitlement must be added in
+         Xcode Signing & Capabilities > Network Extensions for MPTCP to function -->
+
+    <key>CFBundleDisplayName</key>
+    <string>RNET</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>com.rnet.app</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+
+    <key>UILaunchScreen</key>
+    <dict/>
+</dict>
+</plist>

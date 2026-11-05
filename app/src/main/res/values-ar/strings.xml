@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RNET</string>
+    <string name="engine_title">النقل متعدد المسارات</string>
+    <string name="engine_status_active">نشط — QUIC متعدد المسارات يعمل</string>
+    <string name="engine_status_inactive">غير نشط</string>
+    <string name="telemetry_title">قياس عن بُعد للرابط</string>
+    <string name="metric_snr">جودة الإشارة (SNR)</string>
+    <string name="metric_pdr">معدل تسليم الحزم</string>
+    <string name="metric_technology">تقنية الراديو</string>
+    <string name="metric_stations">المحطات النشطة</string>
+    <string name="metric_bytes_in">البيانات المستلمة</string>
+    <string name="metric_bytes_out">البيانات المرسلة</string>
+    <string name="gateway_title">بوابة النقطة الساخنة</string>
+    <string name="gateway_subtitle">توجيه العملاء المتصلين عبر RNET</string>
+    <string name="gateway_consent_required">يتطلب قبول الإفصاح — اضغط للمراجعة</string>
+    <string name="consent_title">بوابة النقطة الساخنة — إفصاح</string>
+    <string name="consent_body_1">عند تفعيل بوابة النقطة الساخنة، سيعمل هذا الجهاز كموجّه
+        شبكة للأجهزة المتصلة بنقطة Wi-Fi الخاصة به.</string>
+    <string name="consent_body_2">سيتم إعادة توجيه حركة مرور الشبكة للأجهزة المتصلة عبر
+        النقل متعدد المسارات المشفر من RNET إلى نقطة النهاية المُكوَّنة. لا يلزم أي برنامج
+        إضافي على الأجهزة المتصلة.</string>
+    <string name="consent_body_3">تُسجَّل إحصائيات حركة المرور غير المُعرِّفة محلياً فقط
+        ولا تُرسَل إلى أي طرف ثالث. لا يتم فحص محتوى الاتصالات.</string>
+    <string name="consent_highlight">يمكنك تعطيل البوابة في أي وقت باستخدام مفتاح التبديل
+        على الشاشة الرئيسية.</string>
+    <string name="consent_accept">أفهم — تفعيل البوابة</string>
+    <string name="consent_decline">إلغاء</string>
+
+    <!-- Mesh consent dialog -->
+    <string name="mesh_consent_route_title">توجيه حركة المرور عبر نظير؟</string>
+    <string name="mesh_consent_route_body">سيُعيد RNET توجيه حركة مرور شبكتك عبر الجهاز
+        القريب «%1$s» الذي لديه اتصال إنترنت نشط. تبقى جميع حركة المرور مشفرة من
+        طرف إلى طرف. يمكنك إيقاف هذا في أي وقت.</string>
+    <string name="mesh_consent_gateway_title">العمل كبوابة شبكة شبكية؟</string>
+    <string name="mesh_consent_gateway_body">سيسمح RNET للأجهزة القريبة في مجموعة الشبكة
+        الشبكية بتوجيه حركة مرورها عبر اتصال الإنترنت لهذا الجهاز. جميع حركة المرور
+        المُرحَّلة مشفرة.</string>
+    <string name="mesh_consent_note">لا يتم فحص أي محتوى لحركة المرور. يتم تخزين
+        إجماليات عدد البايت والتأخير محلياً فقط.</string>
+    <string name="mesh_consent_accept">سماح</string>
+    <string name="mesh_consent_decline">رفض</string>
+    <string name="mesh_unknown_peer">نظير غير معروف</string>
+
+    <!-- Mesh UI labels -->
+    <string name="mesh_title">شبكة شبكية مخصصة</string>
+    <string name="mesh_peers_found">تم اكتشاف %1$d نظير</string>
+    <string name="mesh_no_peers">جارٍ البحث عن الأنظمة…</string>
+    <string name="mesh_connected_via">التوجيه عبر %1$s</string>
+    <string name="mesh_gateway_active">يعمل كبوابة شبكة شبكية</string>
+
+    <!-- Notification -->
+    <string name="notif_title">نقل RNET</string>
+    <string name="notif_stop">إيقاف</string>
+</resources>

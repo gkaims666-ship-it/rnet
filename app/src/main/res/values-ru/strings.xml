@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RNET</string>
+    <string name="engine_title">Многопутевой транспорт</string>
+    <string name="engine_status_active">Активен — работает многопутевой QUIC</string>
+    <string name="engine_status_inactive">Неактивен</string>
+    <string name="telemetry_title">Телеметрия канала</string>
+    <string name="metric_snr">Качество сигнала (SNR)</string>
+    <string name="metric_pdr">Коэффициент доставки пакетов</string>
+    <string name="metric_technology">Радиотехнология</string>
+    <string name="metric_stations">Активные станции</string>
+    <string name="metric_bytes_in">Получено данных</string>
+    <string name="metric_bytes_out">Отправлено данных</string>
+    <string name="gateway_title">Шлюз точки доступа</string>
+    <string name="gateway_subtitle">Маршрутизация клиентов через RNET</string>
+    <string name="gateway_consent_required">Требуется принятие условий — нажмите для ознакомления</string>
+    <string name="consent_title">Шлюз точки доступа — Уведомление</string>
+    <string name="consent_body_1">При включении шлюза это устройство будет действовать как
+        сетевой маршрутизатор для устройств, подключённых к его точке доступа Wi-Fi.</string>
+    <string name="consent_body_2">Сетевой трафик подключённых устройств будет перенаправляться
+        через зашифрованный многопутевой транспорт RNET на настроенный сервер. Дополнительное
+        ПО на подключённых устройствах не требуется.</string>
+    <string name="consent_body_3">Неидентифицирующая статистика (счётчики байт, задержка,
+        количество устройств) хранится локально и не передаётся третьим лицам. Содержимое
+        трафика не анализируется.</string>
+    <string name="consent_highlight">Вы можете отключить шлюз в любой момент с помощью
+        переключателя на главном экране.</string>
+    <string name="consent_accept">Я понимаю — включить шлюз</string>
+    <string name="consent_decline">Отмена</string>
+    <string name="mesh_consent_route_title">Маршрутизировать трафик через узел?</string>
+    <string name="mesh_consent_route_body">RNET будет перенаправлять ваш сетевой трафик через
+        ближайшее устройство «%1$s», у которого есть активное подключение к интернету. Весь
+        трафик остаётся зашифрованным. Вы можете остановить это в любой момент.</string>
+    <string name="mesh_consent_gateway_title">Стать шлюзом ячеистой сети?</string>
+    <string name="mesh_consent_gateway_body">RNET позволит соседним устройствам кластера
+        маршрутизировать свой трафик через интернет-соединение этого устройства. Весь
+        ретранслируемый трафик зашифрован.</string>
+    <string name="mesh_consent_note">Содержимое трафика не анализируется. Только суммарные
+        счётчики байт и задержка сохраняются локально.</string>
+    <string name="mesh_consent_accept">Разрешить</string>
+    <string name="mesh_consent_decline">Отклонить</string>
+    <string name="mesh_unknown_peer">Неизвестный узел</string>
+    <string name="mesh_title">Одноранговая ячеистая сеть</string>
+    <string name="mesh_peers_found">Обнаружено узлов: %1$d</string>
+    <string name="mesh_no_peers">Поиск узлов…</string>
+    <string name="mesh_connected_via">Маршрут через %1$s</string>
+    <string name="mesh_gateway_active">Работает как шлюз ячеистой сети</string>
+    <string name="notif_title">Транспорт RNET</string>
+    <string name="notif_stop">Остановить</string>
+</resources>
