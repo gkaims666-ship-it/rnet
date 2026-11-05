@@ -12,21 +12,27 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Router
-import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SignalCellularAlt
-import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.rnet.app.R
 
 class MainActivity : ComponentActivity() {
@@ -143,34 +149,38 @@ fun RnetDashboard(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
+                title = {
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp
+                    )
+                },
                 actions = {
-                    TextButton(onClick = onFaqClick) {
+                    IconButton(onClick = onFaqClick) {
                         Icon(
                             imageVector = Icons.Filled.Info,
                             contentDescription = stringResource(R.string.faq_button),
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            text = stringResource(R.string.faq_button),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
                 )
             )
-        }
+        },
+        containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         Column(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // ---- Main engine toggle ----
             EngineToggleCard(uiState.engineActive, onEngineToggle)
@@ -183,7 +193,27 @@ fun RnetDashboard(
 
             // ---- Hotspot gateway (requires consent) ----
             GatewayCard(uiState, onGatewayToggle)
+
+            Spacer(Modifier.height(8.dp))
         }
+    }
+}
+
+@Composable
+private fun CardIconBadge(icon: ImageVector, tint: Color, bgColor: Color) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(MaterialTheme.shapes.small)
+            .background(bgColor),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(22.dp)
+        )
     }
 }
 
@@ -191,57 +221,80 @@ fun RnetDashboard(
 private fun CardHeader(
     icon: ImageVector,
     title: String,
-    iconTint: Color = MaterialTheme.colorScheme.primary
+    iconTint: Color = MaterialTheme.colorScheme.primary,
+    iconBg: Color = MaterialTheme.colorScheme.primaryContainer
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = iconTint,
-            modifier = Modifier.size(22.dp)
-        )
-        Spacer(Modifier.width(10.dp))
+        CardIconBadge(icon = icon, tint = iconTint, bgColor = iconBg)
+        Spacer(Modifier.width(12.dp))
         Text(
             text = title,
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface
         )
     }
 }
 
 @Composable
 private fun EngineToggleCard(active: Boolean, onToggle: (Boolean) -> Unit) {
+    val cardColor by animateColorAsState(
+        targetValue = if (active) Color(0xFF0D2137) else MaterialTheme.colorScheme.surface,
+        animationSpec = tween(durationMillis = 400),
+        label = "engineCard"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                      else Color.Transparent,
+        animationSpec = tween(durationMillis = 400),
+        label = "engineBorder"
+    )
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (active)
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
-            else
-                MaterialTheme.colorScheme.surface
-        )
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = borderColor,
+                shape = MaterialTheme.shapes.medium
+            ),
+        colors = CardDefaults.cardColors(containerColor = cardColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
             modifier = Modifier
-                .padding(20.dp)
+                .padding(16.dp)
                 .fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 CardHeader(
-                    icon = Icons.Filled.Shield,
+                    icon = Icons.Filled.Security,
                     title = stringResource(R.string.engine_title),
                     iconTint = if (active) MaterialTheme.colorScheme.primary
-                               else MaterialTheme.colorScheme.onSurfaceVariant
+                               else MaterialTheme.colorScheme.onSurfaceVariant,
+                    iconBg = if (active) MaterialTheme.colorScheme.primaryContainer
+                             else MaterialTheme.colorScheme.surfaceVariant
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = if (active) stringResource(R.string.engine_status_active)
-                           else        stringResource(R.string.engine_status_inactive),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (active) MaterialTheme.colorScheme.primary
-                            else        MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (active) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(MaterialTheme.shapes.extraSmall)
+                                .background(Color(0xFF4CAF50))
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        text = if (active) stringResource(R.string.engine_status_active)
+                               else stringResource(R.string.engine_status_inactive),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (active) Color(0xFF81C784)
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             Switch(checked = active, onCheckedChange = onToggle)
         }
@@ -250,62 +303,12 @@ private fun EngineToggleCard(active: Boolean, onToggle: (Boolean) -> Unit) {
 
 @Composable
 private fun ResilientCoreCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                CardHeader(
-                    icon = Icons.Filled.Router,
-                    title = stringResource(R.string.resilient_core_title)
-                )
-                Switch(checked = enabled, onCheckedChange = onToggle)
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = stringResource(R.string.resilient_core_disclosure),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun TelemetryCard(state: UiState) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            CardHeader(
-                icon = Icons.Filled.SignalCellularAlt,
-                title = stringResource(R.string.telemetry_title)
-            )
-            HorizontalDivider()
-            MetricRow(label = stringResource(R.string.metric_snr),
-                      value = "%.0f%%".format(state.snr))
-            MetricRow(label = stringResource(R.string.metric_pdr),
-                      value = "%.1f%%".format(state.packetDeliveryRate * 100f))
-            MetricRow(label = stringResource(R.string.metric_technology),
-                      value = if (state.bandMhz > 0) "${state.technology} ${state.bandMhz} MHz"
-                              else state.technology)
-            MetricRow(label = stringResource(R.string.metric_stations),
-                      value = state.activeStations.toString())
-            MetricRow(label = stringResource(R.string.metric_bytes_in),
-                      value = formatBytes(state.totalBytesIn))
-            MetricRow(label = stringResource(R.string.metric_bytes_out),
-                      value = formatBytes(state.totalBytesOut))
-        }
-    }
-}
-
-@Composable
-private fun GatewayCard(state: UiState, onToggle: (Boolean) -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(20.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -313,8 +316,106 @@ private fun GatewayCard(state: UiState, onToggle: (Boolean) -> Unit) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     CardHeader(
-                        icon = Icons.Filled.Wifi,
-                        title = stringResource(R.string.gateway_title)
+                        icon = Icons.Filled.Hub,
+                        title = stringResource(R.string.resilient_core_title),
+                        iconTint = if (enabled) Color(0xFF78DCCA)
+                                   else MaterialTheme.colorScheme.onSurfaceVariant,
+                        iconBg = if (enabled) Color(0xFF0D2D2A)
+                                 else MaterialTheme.colorScheme.surfaceVariant
+                    )
+                }
+                Switch(checked = enabled, onCheckedChange = onToggle)
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = stringResource(R.string.resilient_core_disclosure),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun TelemetryCard(state: UiState) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            CardHeader(
+                icon = Icons.Filled.SignalCellularAlt,
+                title = stringResource(R.string.telemetry_title),
+                iconTint = Color(0xFF64B5F6),
+                iconBg = Color(0xFF0D1E2D)
+            )
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+            Spacer(Modifier.height(12.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricRow(
+                    label = stringResource(R.string.metric_snr),
+                    value = "%.0f%%".format(state.snr),
+                    valueColor = signalColor(state.snr / 100f)
+                )
+                MetricRow(
+                    label = stringResource(R.string.metric_pdr),
+                    value = "%.1f%%".format(state.packetDeliveryRate * 100f),
+                    valueColor = signalColor(state.packetDeliveryRate)
+                )
+                MetricRow(
+                    label = stringResource(R.string.metric_technology),
+                    value = if (state.bandMhz > 0) "${state.technology} ${state.bandMhz} MHz"
+                            else state.technology
+                )
+                MetricRow(
+                    label = stringResource(R.string.metric_stations),
+                    value = state.activeStations.toString()
+                )
+                MetricRow(
+                    label = stringResource(R.string.metric_bytes_in),
+                    value = formatBytes(state.totalBytesIn)
+                )
+                MetricRow(
+                    label = stringResource(R.string.metric_bytes_out),
+                    value = formatBytes(state.totalBytesOut)
+                )
+            }
+        }
+    }
+}
+
+private fun signalColor(ratio: Float): Color = when {
+    ratio >= 0.7f -> Color(0xFF81C784)   // green — good
+    ratio >= 0.4f -> Color(0xFFFFB74D)   // amber — mediocre
+    else          -> Color(0xFFEF9A9A)   // red — poor
+}
+
+@Composable
+private fun GatewayCard(state: UiState, onToggle: (Boolean) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    CardHeader(
+                        icon = Icons.Filled.WifiTethering,
+                        title = stringResource(R.string.gateway_title),
+                        iconTint = if (state.gatewayActive) Color(0xFF78DCCA)
+                                   else MaterialTheme.colorScheme.onSurfaceVariant,
+                        iconBg = if (state.gatewayActive) Color(0xFF0D2D2A)
+                                 else MaterialTheme.colorScheme.surfaceVariant
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
@@ -326,27 +427,50 @@ private fun GatewayCard(state: UiState, onToggle: (Boolean) -> Unit) {
                 Switch(checked = state.gatewayActive, onCheckedChange = onToggle)
             }
             if (!state.gatewayConsentGranted) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = stringResource(R.string.gateway_consent_required),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.tertiary
-                )
+                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.gateway_consent_required),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun MetricRow(label: String, value: String) {
+private fun MetricRow(
+    label: String,
+    value: String,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = label,  style = MaterialTheme.typography.bodyMedium,
-             color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text = value,  style = MaterialTheme.typography.bodyMedium,
-             fontWeight = FontWeight.Medium)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = valueColor
+        )
     }
 }
 
@@ -360,23 +484,28 @@ private fun formatBytes(bytes: Long): String = when {
 /** Dark color scheme used throughout the app. */
 @Composable
 fun rnetDarkColorScheme(): ColorScheme = darkColorScheme(
-    primary            = Color(0xFF82B4FF),   // bright blue accent
-    onPrimary          = Color(0xFF003062),
-    primaryContainer   = Color(0xFF1A3A5C),   // dark blue card header
-    onPrimaryContainer = Color(0xFFD6E4FF),
-    secondary          = Color(0xFF9FC8FF),
-    onSecondary        = Color(0xFF003258),
-    secondaryContainer = Color(0xFF1C3A5A),
-    onSecondaryContainer = Color(0xFFD0E4FF),
-    tertiary           = Color(0xFF78DCCA),   // teal for notices
-    onTertiary         = Color(0xFF003731),
-    background         = Color(0xFF0E1317),   // near-black background
-    onBackground       = Color(0xFFE2E8F0),
-    surface            = Color(0xFF161C22),   // card background
-    onSurface          = Color(0xFFE2E8F0),
-    surfaceVariant     = Color(0xFF1E2730),
-    onSurfaceVariant   = Color(0xFF90A4B4),   // muted label text
-    error              = Color(0xFFFFB4AB),
-    onError            = Color(0xFF690005),
-    outline            = Color(0xFF2D3A47)
+    primary              = Color(0xFF7CB9E8),   // soft steel blue
+    onPrimary            = Color(0xFF002E50),
+    primaryContainer     = Color(0xFF0A2540),   // very dark blue container
+    onPrimaryContainer   = Color(0xFFBDD8F5),
+    secondary            = Color(0xFF64B5F6),   // lighter blue accent
+    onSecondary          = Color(0xFF003258),
+    secondaryContainer   = Color(0xFF0D1E2D),
+    onSecondaryContainer = Color(0xFFBDD8F5),
+    tertiary             = Color(0xFF4DB6AC),   // muted teal for notices
+    onTertiary           = Color(0xFF002E2A),
+    tertiaryContainer    = Color(0xFF0A2522),
+    onTertiaryContainer  = Color(0xFFA7D5D0),
+    background           = Color(0xFF090D10),   // deep near-black
+    onBackground         = Color(0xFFDDE3EA),
+    surface              = Color(0xFF101620),   // card background — slightly blue-tinted
+    onSurface            = Color(0xFFDDE3EA),
+    surfaceVariant       = Color(0xFF161E28),   // slightly lighter than surface
+    onSurfaceVariant     = Color(0xFF7F96A8),   // muted label text — softer blue-grey
+    error                = Color(0xFFEF9A9A),
+    onError              = Color(0xFF4E0000),
+    errorContainer       = Color(0xFF2A0A0A),
+    onErrorContainer     = Color(0xFFFFCDD2),
+    outline              = Color(0xFF232E38),   // subtle separator
+    outlineVariant       = Color(0xFF1A2530)
 )

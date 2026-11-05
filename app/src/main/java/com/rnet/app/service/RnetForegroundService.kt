@@ -180,14 +180,29 @@ class RnetForegroundService : Service() {
         }
     }
 
-    /** Starts RnetVpnService with the given SOCKS5 port. Called after Psiphon is ready. */
+    /**
+     * Starts RnetVpnService with the given SOCKS5 port.
+     *
+     * Called from a background coroutine after Psiphon has connected (20–60 s after
+     * onStartCommand). We MUST use startService(), NOT startForegroundService(), here.
+     *
+     * On Android 14+, startForegroundService() throws ForegroundServiceStartNotAllowedException
+     * when called from a background context — i.e. any call that is not synchronously
+     * on the main thread within a few seconds of a user interaction or the service's own
+     * onStartCommand. Because this method is invoked from a coroutine running on Dispatchers.IO
+     * well after onStartCommand has returned, startForegroundService() would crash.
+     *
+     * RnetVpnService is a VpnService subclass; the system promotes it to a foreground service
+     * automatically when it calls startForeground() inside its own onStartCommand(), so there is
+     * no need for the caller to use startForegroundService().
+     */
     private fun startVpnInterface(socksPort: Int) {
         try {
             val intent = Intent(this, RnetVpnService::class.java).apply {
                 action = RnetVpnService.ACTION_START
                 putExtra(RnetVpnService.EXTRA_SOCKS_PORT, socksPort)
             }
-            startForegroundService(intent)
+            startService(intent)   // NOT startForegroundService — see KDoc above
         } catch (e: Exception) {
             android.util.Log.w("RnetForegroundService",
                 "Could not start VPN interface: ${e.message}")
