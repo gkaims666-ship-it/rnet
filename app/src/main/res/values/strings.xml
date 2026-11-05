@@ -62,4 +62,22 @@
     <!-- Notification -->
     <string name="notif_title">RNET Transport</string>
     <string name="notif_stop">Stop</string>
+
+    <!-- Resilient Core (Psiphon) opt-in -->
+    <string name="resilient_core_title">Route via Resilient Core</string>
+    <string name="resilient_core_disclosure">When enabled, your traffic is routed through the
+        Psiphon decentralized network (psiphon.ca) — an open-source, non-profit
+        censorship-circumvention service. Psiphon can see that you are connected,
+        but not the content of your traffic, which is end-to-end encrypted by RNET.
+        Applies on next engine start.</string>
+
+    <!-- Server setup onboarding -->
+    <string name="server_setup_title">RNET Setup</string>
+    <string name="server_setup_body">Enter the address of your RNET relay server.
+        Deploy your own relay in one command — see the deploy/ directory.</string>
+    <string name="server_setup_host_label">Relay host (domain or IP)</string>
+    <string name="server_setup_port_label">UDP port</string>
+    <string name="server_setup_save">Save and continue</string>
+    <string name="server_setup_hint">No relay yet? Run docker compose up in deploy/ on
+        any Linux VPS.</string>
 </resources>

@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rnet.app.gateway.HotspotGateway
+import com.rnet.app.prefs.ServerPrefs
 import com.rnet.app.service.RnetForegroundService
 import com.rnet.app.transport.CellMonitor
 import com.rnet.app.transport.CellSnapshot
@@ -23,6 +24,7 @@ data class UiState(
     val technology: String          = "--",
     val bandMhz: Int                = 0,
     val gatewayConsentGranted: Boolean = false,
+    val useResilientCore: Boolean   = false,    // user opt-in: route via Psiphon
     val errorMessage: String?       = null
 )
 
@@ -31,7 +33,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("rnet_prefs", Context.MODE_PRIVATE)
 
     private val _ui = MutableStateFlow(UiState(
-        gatewayConsentGranted = prefs.getBoolean("gateway_consent_v1", false)
+        gatewayConsentGranted = prefs.getBoolean("gateway_consent_v1", false),
+        useResilientCore = ServerPrefs.useResilientCore(app.applicationContext)
     ))
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
@@ -99,5 +102,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             technology = snap.technology,
             bandMhz    = snap.bandMhz
         ) }
+    }
+
+    /**
+     * Toggles the "Route via Resilient Core" opt-in.
+     *
+     * When enabled, the transport engine routes traffic through the Psiphon
+     * decentralized network (psiphon.ca). The user sees this toggle and its
+     * disclosure text before enabling. Requires app restart to take effect
+     * if the engine is already running.
+     */
+    fun setUseResilientCore(enabled: Boolean) {
+        ServerPrefs.setUseResilientCore(getApplication(), enabled)
+        _ui.update { it.copy(useResilientCore = enabled) }
     }
 }

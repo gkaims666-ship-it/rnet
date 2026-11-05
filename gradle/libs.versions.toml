@@ -1,5 +1,6 @@
 [versions]
 agp                     = "8.5.2"
+psiphon                 = "2.0.42"
 kotlin                  = "2.0.21"
 coreKtx                 = "1.13.1"
 lifecycle               = "2.8.6"
@@ -45,6 +46,9 @@ kotlinx-coroutines-core             = { group = "org.jetbrains.kotlinx", name = 
 
 # Convenience alias used in shared/build.gradle.kts
 bcprov                              = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+
+# Psiphon tunnel-core (GPL v3) — decentralized censorship-circumvention transport
+psiphon-tunnel                      = { group = "ca.psiphon", name = "psiphontunnel", version.ref = "psiphon" }
 
 [plugins]
 android-application                 = { id = "com.android.application",          version.ref = "agp" }

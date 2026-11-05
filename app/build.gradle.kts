@@ -102,6 +102,11 @@ dependencies {
     implementation(libs.bouncycastle.bcprov)
     implementation(libs.bouncycastle.bcpkix)
 
+    // Psiphon tunnel-core — decentralized resilient transport fallback (GPL v3)
+    // Source: https://github.com/Psiphon-Labs/psiphon-tunnel-core
+    // Used only when user enables "Route via Resilient Core" and no private relay is set.
+    implementation(libs.psiphon.tunnel)
+
     // Test
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

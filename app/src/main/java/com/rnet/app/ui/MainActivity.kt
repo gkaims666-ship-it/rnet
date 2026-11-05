@@ -72,6 +72,7 @@ class MainActivity : ComponentActivity() {
                 RnetDashboard(
                     uiState    = uiState,
                     onEngineToggle  = { viewModel.toggleEngine(it) },
+                    onResilientCoreToggle = { viewModel.setUseResilientCore(it) },
                     onGatewayToggle = { wantOn ->
                         if (wantOn) {
                             if (uiState.gatewayConsentGranted) {
@@ -96,7 +97,8 @@ class MainActivity : ComponentActivity() {
 fun RnetDashboard(
     uiState: UiState,
     onEngineToggle: (Boolean) -> Unit,
-    onGatewayToggle: (Boolean) -> Unit
+    onGatewayToggle: (Boolean) -> Unit,
+    onResilientCoreToggle: (Boolean) -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -118,6 +120,9 @@ fun RnetDashboard(
         ) {
             // ---- Main engine toggle ----
             EngineToggleCard(uiState.engineActive, onEngineToggle)
+
+            // ---- Resilient Core opt-in (Psiphon decentralized routing) ----
+            ResilientCoreCard(uiState.useResilientCore, onResilientCoreToggle)
 
             // ---- Telemetry widget ----
             TelemetryCard(uiState)
@@ -153,6 +158,37 @@ private fun EngineToggleCard(active: Boolean, onToggle: (Boolean) -> Unit) {
                 )
             }
             Switch(checked = active, onCheckedChange = onToggle)
+        }
+    }
+}
+
+@Composable
+private fun ResilientCoreCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Route via Resilient Core",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Switch(checked = enabled, onCheckedChange = onToggle)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "When enabled, your traffic is routed through the Psiphon " +
+                       "decentralized network (psiphon.ca) — an open-source, non-profit " +
+                       "censorship-circumvention service. " +
+                       "Psiphon can see that you are connected, but not the content of " +
+                       "your traffic, which is end-to-end encrypted by RNET. " +
+                       "Applies on next engine start.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

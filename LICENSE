@@ -1,0 +1,34 @@
+RNET — Resilient Network Transport Framework
+Copyright (C) 2024 gkaims666-ship-it
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+────────────────────────────────────────────────────────────────────
+Third-party components
+────────────────────────────────────────────────────────────────────
+
+psiphon-tunnel-core (ca.psiphon:psiphontunnel)
+  License: GNU General Public License v3
+  Source:  https://github.com/Psiphon-Labs/psiphon-tunnel-core
+  Used for: optional "Route via Resilient Core" transport fallback.
+  This component is included in the app only when compiled with the
+  psiphon-tunnel dependency. Its GPL v3 license requires this project
+  to be distributed under GPL v3 when it is linked in.
+
+Bouncy Castle (org.bouncycastle)
+  License: MIT / Bouncy Castle License
+  Source:  https://www.bouncycastle.org/
+
+Kotlin standard library and AndroidX
+  License: Apache License 2.0

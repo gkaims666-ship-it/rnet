@@ -37,4 +37,22 @@ object ServerPrefs {
     fun clear(ctx: Context) {
         ctx.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE).edit().clear().apply()
     }
+
+    // ── Resilient Core preference ──────────────────────────────────────────────
+
+    private const val KEY_RESILIENT_CORE = "use_resilient_core"
+
+    /**
+     * Returns true when the user has opted in to routing via the Psiphon
+     * decentralized network. Default: false (opt-in, never automatic).
+     */
+    fun useResilientCore(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+           .getBoolean(KEY_RESILIENT_CORE, false)
+
+    fun setUseResilientCore(ctx: Context, enabled: Boolean) {
+        ctx.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_RESILIENT_CORE, enabled)
+            .apply()
+    }
 }

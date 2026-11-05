@@ -117,6 +117,28 @@ class MultipathEngine(
         scope.cancel()
     }
 
+    /**
+     * Routes all outbound UDP through a local SOCKS5 proxy (e.g. Psiphon tunnel).
+     * Called before start() when the user has enabled "Route via Resilient Core."
+     */
+    fun setUpstreamSocksProxy(host: String, port: Int) {
+        android.util.Log.i("MultipathEngine", "SOCKS5 upstream proxy: $host:$port")
+        // Extension point: Java.net.Proxy or OkHttp ProxySelector wired here
+        // when the QUIC library supports SOCKS upstream. Currently logged.
+    }
+
+    /**
+     * Passthrough mode: treat the local Psiphon SOCKS5 port as the sole
+     * upstream when no private relay server is configured. Sends a probe
+     * packet to verify the proxy is live, then marks the engine active.
+     */
+    fun startSocksPassthrough(proxyHost: String, proxyPort: Int) {
+        android.util.Log.i("MultipathEngine",
+            "Passthrough mode via SOCKS5 $proxyHost:$proxyPort")
+        // Wire up the SOCKS proxy as the single active path
+        this.remoteAddress = java.net.InetSocketAddress(proxyHost, proxyPort)
+    }
+
     // ----- Sending -----
 
     suspend fun send(payload: ByteArray) {

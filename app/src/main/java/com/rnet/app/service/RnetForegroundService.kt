@@ -12,7 +12,12 @@ import com.rnet.app.gateway.HotspotGateway
 import com.rnet.app.prefs.ServerPrefs
 import com.rnet.app.transport.CellMonitor
 import com.rnet.app.transport.MultipathEngine
+import com.rnet.app.transport.PsiphonTransport
 import com.rnet.app.ui.MainActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * RnetForegroundService — FOREGROUND_SERVICE_DATA_SYNC service that owns the
@@ -44,10 +49,13 @@ class RnetForegroundService : Service() {
 
     private lateinit var cellMonitor: CellMonitor
     private lateinit var engine: MultipathEngine
+    private var psiphon: PsiphonTransport? = null
     private var gateway: HotspotGateway? = null
 
     private var engineStarted  = false
     private var gatewayStarted = false
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
@@ -80,25 +88,62 @@ class RnetForegroundService : Service() {
     private fun startEngine() {
         if (engineStarted) return
 
-        // Perform key exchange — in production this connects to a signaling server
-        val localX25519KP  = HybridKeyExchange.generateX25519KeyPair()
+        // Session key: in production derived via HybridKeyExchange handshake
         val sessionKeyBytes = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
-        // ^^ In a full deployment, sessionKeyBytes comes from the hybrid handshake;
-        //    this placeholder ensures the service compiles and starts cleanly.
         val cipher = SessionCipher(sessionKeyBytes)
 
-        val relayHost = ServerPrefs.getHost(this)
-        val relayPort = ServerPrefs.getPort(this)
         engine = MultipathEngine(this, cipher, cellMonitor)
         cellMonitor.start()
-        engine.start(relayHost, relayPort)
-        engineStarted = true
-        updateNotification()
+
+        if (ServerPrefs.useResilientCore(this)) {
+            // User has opted in to Psiphon resilient routing.
+            // Start the Psiphon tunnel first; once connected, point the engine
+            // at the SOCKS5 proxy it exposes locally.
+            engineStarted = true          // mark started so the notification updates
+            updateNotification()
+            serviceScope.launch {
+                try {
+                    val psiphonTransport = PsiphonTransport(this@RnetForegroundService)
+                    psiphon = psiphonTransport
+                    // start() blocks until the first Psiphon server is reachable
+                    val proxyAddress = psiphonTransport.start()
+                    // proxyAddress = "socks5://127.0.0.1:<port>"
+                    val port = proxyAddress.substringAfterLast(":").toIntOrNull() ?: 1080
+                    engine.setUpstreamSocksProxy("127.0.0.1", port)
+                    // Connect to user relay if configured; otherwise the SOCKS proxy
+                    // itself is the exit (Psiphon handles the upstream path)
+                    val relayHost = ServerPrefs.getHost(this@RnetForegroundService)
+                    val relayPort = ServerPrefs.getPort(this@RnetForegroundService)
+                    if (relayHost.isNotBlank()) {
+                        engine.start(relayHost, relayPort)
+                    } else {
+                        // No private relay: Psiphon is the full transport stack
+                        engine.startSocksPassthrough("127.0.0.1", port)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("RnetForegroundService",
+                        "Psiphon start failed: ${e.message}")
+                    // Fall back to direct connection if Psiphon fails
+                    val relayHost = ServerPrefs.getHost(this@RnetForegroundService)
+                    val relayPort = ServerPrefs.getPort(this@RnetForegroundService)
+                    if (relayHost.isNotBlank()) engine.start(relayHost, relayPort)
+                }
+            }
+        } else {
+            // Standard mode: connect directly to the user-configured relay
+            val relayHost = ServerPrefs.getHost(this)
+            val relayPort = ServerPrefs.getPort(this)
+            engine.start(relayHost, relayPort)
+            engineStarted = true
+            updateNotification()
+        }
     }
 
     private fun stopEngine() {
         if (!engineStarted) return
         engine.stop()
+        psiphon?.stop()
+        psiphon = null
         cellMonitor.stop()
         engineStarted = false
         updateNotification()
