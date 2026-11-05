@@ -71,6 +71,20 @@ class MeshRouter(
         bleScanner.startScan()
         wifiMesh.startDiscovery()
 
+        // Best-effort STUN: discover reflexive address for NAT traversal so mesh
+        // peers on different NATs can establish direct connections. This is a
+        // fire-and-forget call; the mesh continues normally if STUN fails.
+        scope.launch {
+            val reflexive = StunNatHelper.discoverReflexiveAddress()
+            if (reflexive != null) {
+                android.util.Log.i("MeshRouter",
+                    "STUN reflexive address: ${reflexive.ip}:${reflexive.port}")
+                // Share reflexive address with BLE/Wi-Fi Direct advertisements
+                // so peers can attempt direct hole-punching connections.
+                bleScanner.updateReflexiveAddress(reflexive.ip, reflexive.port)
+            }
+        }
+
         // Monitor local uplink status
         scope.launch {
             while (isActive) {

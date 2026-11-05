@@ -123,4 +123,14 @@ class BleMeshScanner(private val context: Context) {
 
         override fun onScanFailed(errorCode: Int) {}
     }
+
+    /**
+     * Stores the STUN-discovered reflexive address so it can be included in
+     * future BLE advertisement payloads, enabling direct NAT hole-punching
+     * between mesh peers. Currently logged; full advertisement encoding is
+     * left as a protocol extension point.
+     */
+    fun updateReflexiveAddress(ip: String, port: Int) {
+        android.util.Log.d("BleMeshScanner", "Reflexive addr for mesh: $ip:$port")
+    }
 }

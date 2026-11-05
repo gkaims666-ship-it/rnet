@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import com.rnet.app.prefs.ServerPrefs
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -46,6 +47,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Redirect to onboarding if no relay server has been configured yet
+        if (ServerSetupActivity.shouldShow(this)) {
+            startActivity(Intent(this, ServerSetupActivity::class.java))
+            finish()
+            return
+        }
 
         // Request minimum required permissions on first launch
         val permissions = buildList {

@@ -53,6 +53,11 @@
             android:exported="false"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
 
+        <activity
+            android:name=".ui.ServerSetupActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
+
         <!-- ── Foreground transport service ── -->
         <service
             android:name=".service.RnetForegroundService"

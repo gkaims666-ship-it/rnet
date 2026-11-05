@@ -1,6 +1,23 @@
 import Foundation
 import Combine
 
+// ServerConfig — persists user-configured relay endpoint (UserDefaults).
+// Set via ServerSetupView on first launch; engine will not start without it.
+struct ServerConfig {
+    static let hostKey = "rnet_relay_host"
+    static let portKey = "rnet_relay_port"
+
+    static var host: String { UserDefaults.standard.string(forKey: hostKey) ?? "" }
+    static var port: Int    { UserDefaults.standard.integer(forKey: portKey) == 0
+                                ? 7777 : UserDefaults.standard.integer(forKey: portKey) }
+    static var isConfigured: Bool { !host.isEmpty }
+
+    static func save(host: String, port: Int) {
+        UserDefaults.standard.set(host, forKey: hostKey)
+        UserDefaults.standard.set(port, forKey: portKey)
+    }
+}
+
 /// iOS ViewModel — mirrors Android MainViewModel.kt.
 /// Owned by RnetApp and injected into the SwiftUI view hierarchy via @EnvironmentObject.
 @MainActor
@@ -43,11 +60,15 @@ final class RnetViewModel: ObservableObject {
         Task {
             if on {
                 do {
+                    guard ServerConfig.isConfigured else {
+                        errorMessage = "No relay server configured. Open Settings to add your relay."
+                        return
+                    }
                     // Placeholder: derive a real session key via HybridKeyExchange in production
                     let dummyKey = Data(repeating: 0xAB, count: 32)
                     try await engine.start(
-                        host: "your.rnet.server.example.com",
-                        port: 7777,
+                        host: ServerConfig.host,
+                        port: ServerConfig.port,
                         sessionKey: dummyKey
                     )
                     engineActive = true

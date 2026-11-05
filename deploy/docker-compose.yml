@@ -1,0 +1,34 @@
+version: "3.9"
+
+# RNET Relay Server — single-command deployment
+#
+# Usage:
+#   cd deploy/
+#   docker compose up -d
+#
+# Then set your domain/IP and port 7777 as the relay endpoint in the RNET app.
+# The relay only sees encrypted, opaque UDP datagrams — it cannot read content.
+
+services:
+  relay:
+    build:
+      context: ./relay
+      dockerfile: Dockerfile
+    image: rnet-relay:latest
+    container_name: rnet-relay
+    restart: unless-stopped
+    ports:
+      - "${RELAY_PORT:-7777}:7777/udp"
+    environment:
+      - RELAY_PORT=${RELAY_PORT:-7777}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # UDP healthcheck: verify the process is running
+      test: ["CMD", "pgrep", "rnet-relay"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

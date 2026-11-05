@@ -9,6 +9,7 @@ import com.rnet.app.R
 import com.rnet.app.crypto.HybridKeyExchange
 import com.rnet.app.crypto.SessionCipher
 import com.rnet.app.gateway.HotspotGateway
+import com.rnet.app.prefs.ServerPrefs
 import com.rnet.app.transport.CellMonitor
 import com.rnet.app.transport.MultipathEngine
 import com.rnet.app.ui.MainActivity
@@ -38,9 +39,7 @@ class RnetForegroundService : Service() {
         private const val CHANNEL_ID    = "rnet_service_channel"
         private const val NOTIF_ID      = 1001
 
-        // TODO: replace with actual server host/port from configuration
-        private const val REMOTE_HOST   = "your.rnet.server.example.com"
-        private const val REMOTE_PORT   = 7777
+        private const val DEFAULT_PORT  = 7777
     }
 
     private lateinit var cellMonitor: CellMonitor
@@ -88,9 +87,11 @@ class RnetForegroundService : Service() {
         //    this placeholder ensures the service compiles and starts cleanly.
         val cipher = SessionCipher(sessionKeyBytes)
 
+        val relayHost = ServerPrefs.getHost(this)
+        val relayPort = ServerPrefs.getPort(this)
         engine = MultipathEngine(this, cipher, cellMonitor)
         cellMonitor.start()
-        engine.start(REMOTE_HOST, REMOTE_PORT)
+        engine.start(relayHost, relayPort)
         engineStarted = true
         updateNotification()
     }
