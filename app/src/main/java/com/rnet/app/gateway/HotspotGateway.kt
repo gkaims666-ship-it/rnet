@@ -202,7 +202,7 @@ class HotspotGateway(
         val buf = ByteArray(1)
         while (stream.read(buf) == 1) {
             sb.append(buf[0].toChar())
-            if (prev == '\r' && buf[0] == '\n' && sb.endsWith("\r\n\r\n")) break
+            if (prev == '\r' && buf[0].toInt() == '\n'.code && sb.endsWith("\r\n\r\n")) break
             prev = buf[0].toChar()
         }
         return if (sb.isNotBlank()) sb.toString() else null

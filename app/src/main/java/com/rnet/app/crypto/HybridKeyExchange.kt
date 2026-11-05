@@ -4,10 +4,11 @@ import android.util.Log
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.PublicKey
+import java.security.SecureRandom
 import java.security.spec.ECGenParameterSpec
 import javax.crypto.KeyAgreement
+import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
-import java.security.MessageDigest
 
 /**
  * HybridKeyExchange — ML-KEM-768 (CRYSTALS-Kyber) + X25519 hybrid key encapsulation.
@@ -37,6 +38,10 @@ object HybridKeyExchange {
 
     private const val TAG = "HybridKEX"
 
+    private val bcProvider by lazy {
+        org.bouncycastle.jce.provider.BouncyCastleProvider()
+    }
+
     // -------------------------------------------------------------------------
     // X25519 (ECDH on Curve25519)
     // -------------------------------------------------------------------------
@@ -55,18 +60,16 @@ object HybridKeyExchange {
     }
 
     // -------------------------------------------------------------------------
-    // ML-KEM-768 (via Bouncy Castle KEM API)
+    // ML-KEM-768 (via Bouncy Castle JCA — KYBER768)
     // -------------------------------------------------------------------------
 
-    fun generateKemKeyPair(): org.bouncycastle.pqc.jcajce.spec.KyberParameterSpec.let {
-        // Using Bouncy Castle PQC JCA provider
-        val provider = org.bouncycastle.jce.provider.BouncyCastleProvider()
-        val kpg = KeyPairGenerator.getInstance("KYBER768", provider)
+    fun generateKemKeyPair(): KeyPair {
+        val kpg = KeyPairGenerator.getInstance("KYBER768", bcProvider)
         kpg.initialize(
             org.bouncycastle.pqc.jcajce.spec.KyberParameterSpec.kyber768,
-            java.security.SecureRandom()
+            SecureRandom()
         )
-        return@let kpg.generateKeyPair()
+        return kpg.generateKeyPair()
     }
 
     /**
@@ -74,16 +77,10 @@ object HybridKeyExchange {
      * Returns Pair(ciphertext, sharedSecret).
      */
     fun kemEncapsulate(recipientPublicKey: PublicKey): Pair<ByteArray, ByteArray> {
-        val provider = org.bouncycastle.jce.provider.BouncyCastleProvider()
-        val kemGen = javax.crypto.KeyGenerator.getInstance("KYBER768", provider)
-        // Bouncy Castle KYBER KEM — wrap into KEM extractor
-        val kem = org.bouncycastle.pqc.jcajce.provider.kyber.BCKyberPublicKey::class.java
-            .let { org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMGenerator(java.security.SecureRandom()) }
-        val kemResult = kem.generateEncapsulated(
-            org.bouncycastle.crypto.util.SubjectPublicKeyInfoFactory.createSubjectPublicKeyInfo(
-                (recipientPublicKey as org.bouncycastle.pqc.jcajce.provider.kyber.BCKyberPublicKey).engineGetKeyParams()
-            )
-        )
+        val bcPub = recipientPublicKey as org.bouncycastle.pqc.jcajce.provider.kyber.BCKyberPublicKey
+        val kyberPub = bcPub.keyParams
+        val kem = org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMGenerator(SecureRandom())
+        val kemResult = kem.generateEncapsulated(kyberPub)
         return Pair(kemResult.encapsulation, kemResult.secret)
     }
 
@@ -91,9 +88,8 @@ object HybridKeyExchange {
      * Decapsulate: recover shared secret from [ciphertext] using [privateKey].
      */
     fun kemDecapsulate(privateKey: java.security.PrivateKey, ciphertext: ByteArray): ByteArray {
-        val extractor = org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMExtractor(
-            (privateKey as org.bouncycastle.pqc.jcajce.provider.kyber.BCKyberPrivateKey).engineGetKeyParams()
-        )
+        val bcPriv = privateKey as org.bouncycastle.pqc.jcajce.provider.kyber.BCKyberPrivateKey
+        val extractor = org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMExtractor(bcPriv.keyParams)
         return extractor.extractSecret(ciphertext)
     }
 
@@ -120,7 +116,7 @@ object HybridKeyExchange {
 
     private fun hkdfSha256(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
         // Extract
-        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(salt, "HmacSHA256"))
         val prk = mac.doFinal(ikm)
         // Expand
