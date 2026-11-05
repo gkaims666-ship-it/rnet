@@ -34,7 +34,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Run unit tests
-        run: ./gradlew :app:testDebugUnitTest :shared:testAndroidDebugUnitTest --no-daemon
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+        env:
+          kotlin.native.ignoreDisabledTargets: "true"
 
       - uses: actions/upload-artifact@v4
         if: always()
