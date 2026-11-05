@@ -100,7 +100,10 @@ class RnetForegroundService : Service() {
         val cipher = SessionCipher(sessionKeyBytes)
 
         engine = MultipathEngine(this, cipher, cellMonitor)
-        cellMonitor.start()
+        // Note: cellMonitor.start() is intentionally NOT called here.
+        // MainViewModel manages its own CellMonitor for UI telemetry.
+        // MultipathEngine reads from cellMonitor.flow for MTU adaptation
+        // but starting a second telephony listener would cause a crash.
 
         if (ServerPrefs.useResilientCore(this)) {
             // User has opted in to Psiphon resilient routing.
@@ -203,7 +206,6 @@ class RnetForegroundService : Service() {
         engine.stop()
         psiphon?.stop()
         psiphon = null
-        cellMonitor.stop()
         engineStarted = false
         updateNotification()
         if (!gatewayStarted) stopSelf()
