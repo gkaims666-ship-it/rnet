@@ -21,7 +21,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.rnet.app.R
-import com.rnet.app.service.RnetVpnService
 
 class MainActivity : ComponentActivity() {
 
@@ -32,14 +31,17 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { /* permissions result — app continues regardless */ }
 
-    // VPN permission launcher — Android requires explicit user approval before VpnService starts
+    // VPN permission launcher — Android requires explicit user approval before VpnService starts.
+    // After approval, we start RnetForegroundService (which starts Psiphon, then starts
+    // RnetVpnService once the SOCKS5 port is ready). This avoids a double-Psiphon crash.
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            // User approved VPN — start the service
-            startVpnService()
+            // VPN permission granted — now start the foreground engine service
+            viewModel.toggleEngine(true)
         }
+        // If denied: do nothing; UI switch should revert (handled by state flow)
     }
 
     // Consent activity launcher (hotspot gateway)
@@ -73,9 +75,12 @@ class MainActivity : ComponentActivity() {
                 RnetDashboard(
                     uiState    = uiState,
                     onEngineToggle  = { wantOn ->
-                        if (wantOn) requestVpnAndStart()
-                        else stopVpnService()
-                        viewModel.toggleEngine(wantOn)
+                        if (wantOn) {
+                            // Request VPN permission first; engine starts in the callback
+                            requestVpnPermission()
+                        } else {
+                            viewModel.toggleEngine(false)
+                        }
                     },
                     onResilientCoreToggle = { viewModel.setUseResilientCore(it) },
                     onGatewayToggle = { wantOn ->
@@ -96,30 +101,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Request VPN permission if needed, then start the VPN service. */
-    private fun requestVpnAndStart() {
+    /**
+     * Request VPN permission if needed. If permission is already granted,
+     * starts the engine immediately. If not, shows the system VPN dialog;
+     * the engine starts in [vpnPermissionLauncher] callback after approval.
+     */
+    private fun requestVpnPermission() {
         val vpnIntent = VpnService.prepare(this)
         if (vpnIntent != null) {
             // Need user approval — show the system VPN dialog
             vpnPermissionLauncher.launch(vpnIntent)
         } else {
-            // Already approved — start immediately
-            startVpnService()
+            // Already approved — start engine directly
+            viewModel.toggleEngine(true)
         }
-    }
-
-    private fun startVpnService() {
-        val intent = Intent(this, RnetVpnService::class.java).apply {
-            action = RnetVpnService.ACTION_START
-        }
-        startForegroundService(intent)
-    }
-
-    private fun stopVpnService() {
-        val intent = Intent(this, RnetVpnService::class.java).apply {
-            action = RnetVpnService.ACTION_STOP
-        }
-        startService(intent)
     }
 }
 

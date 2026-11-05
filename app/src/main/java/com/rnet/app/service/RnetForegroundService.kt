@@ -45,6 +45,13 @@ class RnetForegroundService : Service() {
         private const val NOTIF_ID      = 1001
 
         private const val DEFAULT_PORT  = 7777
+
+        /**
+         * The SOCKS5 port Psiphon is currently listening on.
+         * Set when Psiphon connects, cleared when it stops.
+         * Read by MainActivity to pass to RnetVpnService.
+         */
+        @Volatile var activeSocksPort: Int = 0
     }
 
     private lateinit var cellMonitor: CellMonitor
@@ -109,6 +116,7 @@ class RnetForegroundService : Service() {
                     val proxyAddress = psiphonTransport.start()
                     // proxyAddress = "socks5://127.0.0.1:<port>"
                     val port = proxyAddress.substringAfterLast(":").toIntOrNull() ?: 1080
+                    activeSocksPort = port   // publish for RnetVpnService to read
                     engine.setUpstreamSocksProxy("127.0.0.1", port)
                     // Connect to user relay if configured; otherwise the SOCKS proxy
                     // itself is the exit (Psiphon handles the upstream path)
@@ -120,6 +128,8 @@ class RnetForegroundService : Service() {
                         // No private relay: Psiphon is the full transport stack
                         engine.startSocksPassthrough("127.0.0.1", port)
                     }
+                    // Start the VPN interface now that SOCKS5 is ready
+                    startVpnInterface(activeSocksPort)
                 } catch (e: Exception) {
                     android.util.Log.e("RnetForegroundService",
                         "Psiphon start failed: ${e.message}")
@@ -149,8 +159,11 @@ class RnetForegroundService : Service() {
                         psiphon = psiphonTransport
                         val proxyAddress = psiphonTransport.start()
                         val port = proxyAddress.substringAfterLast(":").toIntOrNull() ?: 1080
+                        activeSocksPort = port   // publish for RnetVpnService to read
                         engine.setUpstreamSocksProxy("127.0.0.1", port)
                         engine.startSocksPassthrough("127.0.0.1", port)
+                        // Start the VPN interface now that SOCKS5 is ready
+                        startVpnInterface(port)
                     } catch (e: Exception) {
                         android.util.Log.e("RnetForegroundService",
                             "Psiphon fallback start failed: ${e.message}")
@@ -164,8 +177,29 @@ class RnetForegroundService : Service() {
         }
     }
 
+    /** Starts RnetVpnService with the given SOCKS5 port. Called after Psiphon is ready. */
+    private fun startVpnInterface(socksPort: Int) {
+        try {
+            val intent = Intent(this, RnetVpnService::class.java).apply {
+                action = RnetVpnService.ACTION_START
+                putExtra(RnetVpnService.EXTRA_SOCKS_PORT, socksPort)
+            }
+            startForegroundService(intent)
+        } catch (e: Exception) {
+            android.util.Log.w("RnetForegroundService",
+                "Could not start VPN interface: ${e.message}")
+        }
+    }
+
     private fun stopEngine() {
         if (!engineStarted) return
+        // Stop VPN interface first
+        try {
+            startService(Intent(this, RnetVpnService::class.java).apply {
+                action = RnetVpnService.ACTION_STOP
+            })
+        } catch (_: Exception) {}
+        activeSocksPort = 0
         engine.stop()
         psiphon?.stop()
         psiphon = null

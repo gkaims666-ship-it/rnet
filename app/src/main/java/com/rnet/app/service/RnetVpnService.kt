@@ -11,36 +11,33 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.rnet.app.R
-import com.rnet.app.transport.PsiphonTransport
 import com.rnet.app.ui.MainActivity
 import kotlinx.coroutines.*
 import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.nio.ByteBuffer
 
 /**
  * RnetVpnService — Android VpnService that captures all device IP traffic
- * and routes it through the Psiphon SOCKS5 proxy tunnel.
+ * and routes it through the SOCKS5 proxy managed by RnetForegroundService.
+ *
+ * IMPORTANT: This service does NOT start Psiphon itself.
+ * PsiphonTransport is owned by RnetForegroundService. When the SOCKS5 port
+ * is ready, RnetForegroundService stores it in [RnetForegroundService.activeSocksPort]
+ * and starts this service with that port as an Intent extra.
  *
  * How it works:
- *   1. Establish a VPN interface (tun device) capturing all IPv4 traffic.
- *   2. Start PsiphonTransport to get a local SOCKS5 proxy port.
- *   3. Forward TCP packets from the tun interface through SOCKS5 connections.
- *
- * The VPN interface is set up with:
- *   - Virtual subnet: 10.111.222.0/24
- *   - MTU: 1500
- *   - All IPv4 routes captured (0.0.0.0/0)
- *   - DNS overridden to 1.1.1.1 (Cloudflare) and 8.8.8.8 (Google)
+ *   1. Receive SOCKS5 port in ACTION_START intent extra (from RnetForegroundService).
+ *   2. Establish a VPN tun interface capturing all IPv4 traffic.
+ *   3. Forward TCP SYN packets through the SOCKS5 proxy.
  */
 class RnetVpnService : VpnService() {
 
     companion object {
-        const val ACTION_START = "com.rnet.VPN_START"
-        const val ACTION_STOP  = "com.rnet.VPN_STOP"
+        const val ACTION_START      = "com.rnet.VPN_START"
+        const val ACTION_STOP       = "com.rnet.VPN_STOP"
+        const val EXTRA_SOCKS_PORT  = "socks_port"
 
         private const val TAG           = "RnetVpnService"
         private const val CHANNEL_ID    = "rnet_vpn_channel"
@@ -52,10 +49,6 @@ class RnetVpnService : VpnService() {
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
-    private var psiphonTransport: PsiphonTransport? = null
-
-    // serviceScope is created fresh each time the service starts.
-    // If the service is restarted (START_STICKY), a new scope is created.
     private var serviceScope: CoroutineScope? = null
 
     override fun onCreate() {
@@ -70,19 +63,25 @@ class RnetVpnService : VpnService() {
                 START_NOT_STICKY
             }
             else -> {
-                // Create a fresh scope each time we start (handles START_STICKY restarts)
+                val socksPort = intent?.getIntExtra(EXTRA_SOCKS_PORT, 0) ?: 0
+                if (socksPort <= 0) {
+                    Log.e(TAG, "ACTION_START received without valid SOCKS port — stopping")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
+                // Create a fresh scope each time (handles START_STICKY restarts)
                 serviceScope?.cancel()
                 serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
                 startForeground(NOTIF_ID, buildNotification(getString(R.string.vpn_status_connecting)))
-                serviceScope!!.launch { startVpn() }
+                serviceScope!!.launch { startVpn(socksPort) }
                 START_STICKY
             }
         }
     }
 
     override fun onRevoke() {
-        // Called by Android when user revokes VPN permission
         stopVpn()
         super.onRevoke()
     }
@@ -92,41 +91,32 @@ class RnetVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private suspend fun startVpn() {
+    private suspend fun startVpn(socksPort: Int) {
         try {
-            // 1. Start Psiphon tunnel
-            updateNotification(getString(R.string.vpn_status_starting_tunnel))
-            val transport = PsiphonTransport(this)
-            psiphonTransport = transport
-            val proxyAddr = transport.start()   // blocks until connected
-            val proxyPort = proxyAddr.substringAfterLast(":").toIntOrNull() ?: 1080
-            Log.i(TAG, "Psiphon SOCKS5 proxy ready on port $proxyPort")
-
-            // 2. Build VPN interface (blocking mode — reads block until data available)
+            // Build VPN interface (blocking mode)
             val builder = Builder()
                 .setSession("RNET")
                 .setMtu(VPN_MTU)
                 .addAddress(VPN_ADDRESS, 24)
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
-                .addRoute(VPN_ROUTE, VPN_PREFIX)   // capture all traffic
-                .setBlocking(true)                  // blocking I/O — no busy-wait loop
+                .addRoute(VPN_ROUTE, VPN_PREFIX)
+                .setBlocking(true)
 
             // Exclude our own app from the VPN to avoid routing loops
             try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
 
             vpnInterface = builder.establish()
                 ?: run {
-                    Log.e(TAG, "VPN interface could not be established (permission not granted?)")
+                    Log.e(TAG, "VPN interface could not be established")
                     stopSelf()
                     return
                 }
 
             updateNotification(getString(R.string.vpn_status_active))
-            Log.i(TAG, "VPN interface established, forwarding via SOCKS5 :$proxyPort")
+            Log.i(TAG, "VPN interface established, forwarding via SOCKS5 :$socksPort")
 
-            // 3. Forward traffic in the background
-            forwardTraffic(vpnInterface!!, proxyPort)
+            forwardTraffic(vpnInterface!!, socksPort)
 
         } catch (e: CancellationException) {
             Log.i(TAG, "VPN coroutine cancelled")
@@ -137,33 +127,25 @@ class RnetVpnService : VpnService() {
         }
     }
 
-    /**
-     * Reads IP packets from the tun interface (blocking mode) and spawns
-     * a coroutine per TCP connection to forward through SOCKS5.
-     *
-     * Runs entirely on the coroutine calling it; cancellation closes the loop.
-     */
     private suspend fun forwardTraffic(tun: ParcelFileDescriptor, socksPort: Int) {
-        val input  = FileInputStream(tun.fileDescriptor)
+        val input = FileInputStream(tun.fileDescriptor)
         val packetBuf = ByteArray(VPN_MTU + 40)
 
         while (currentCoroutineContext().isActive) {
             try {
-                // Blocking read — waits for data, no busy loop
                 val len = withContext(Dispatchers.IO) { input.read(packetBuf) }
                 if (len <= 0) break
 
                 val packet = packetBuf.copyOf(len)
 
-                // Parse IP header
                 val ipVersion = (packet[0].toInt() and 0xFF) shr 4
-                if (ipVersion != 4) continue   // skip IPv6
+                if (ipVersion != 4) continue
 
                 val protocol = packet[9].toInt() and 0xFF
-                if (protocol != 6) continue    // TCP only; UDP ASSOCIATE is complex
+                if (protocol != 6) continue   // TCP only
 
                 val ipHeaderLen = (packet[0].toInt() and 0x0F) * 4
-                if (len < ipHeaderLen + 4) continue
+                if (len < ipHeaderLen + 14) continue
 
                 val destIpBytes = ByteArray(4)
                 System.arraycopy(packet, 16, destIpBytes, 0, 4)
@@ -172,20 +154,15 @@ class RnetVpnService : VpnService() {
                 val destPort = ((packet[ipHeaderLen + 2].toInt() and 0xFF) shl 8) or
                                (packet[ipHeaderLen + 3].toInt() and 0xFF)
 
-                // TCP flags: at offset ipHeaderLen+13
-                if (len < ipHeaderLen + 14) continue
                 val tcpFlags = packet[ipHeaderLen + 13].toInt() and 0xFF
-                val isSyn    = (tcpFlags and 0x02) != 0
-
-                // Only open SOCKS5 connections on SYN packets (new connections)
-                if (!isSyn) continue
+                if ((tcpFlags and 0x02) == 0) continue   // only SYN
 
                 val scope = serviceScope ?: break
                 scope.launch(Dispatchers.IO) {
                     try {
                         openSocks5Connection(destIp, destPort, socksPort)
                     } catch (e: Exception) {
-                        Log.d(TAG, "SOCKS5 connection to $destIp:$destPort failed: ${e.message}")
+                        Log.d(TAG, "SOCKS5 to $destIp:$destPort failed: ${e.message}")
                     }
                 }
 
@@ -193,57 +170,36 @@ class RnetVpnService : VpnService() {
                 break
             } catch (e: Exception) {
                 if (!currentCoroutineContext().isActive) break
-                Log.w(TAG, "Packet read error: ${e.message}")
                 delay(10)
             }
         }
     }
 
-    /**
-     * Opens a SOCKS5 connection to the destination.
-     * The Android OS handles response routing back via the VPN interface.
-     * We just need to open the connection and keep it alive briefly.
-     */
-    private fun openSocks5Connection(
-        destIp: InetAddress,
-        destPort: Int,
-        socksPort: Int
-    ) {
+    private fun openSocks5Connection(destIp: InetAddress, destPort: Int, socksPort: Int) {
         val sock = Socket()
         try {
             sock.connect(InetSocketAddress("127.0.0.1", socksPort), 5000)
             sock.soTimeout = 30000
-
             val sin  = sock.getInputStream()
             val sout = sock.getOutputStream()
 
-            // SOCKS5 greeting: VER=5, NMETHODS=1, NO_AUTH
             sout.write(byteArrayOf(0x05, 0x01, 0x00))
             sout.flush()
+            val choice = ByteArray(2)
+            if (sin.read(choice) < 2 || choice[1] != 0x00.toByte()) return
 
-            val serverChoice = ByteArray(2)
-            var read = sin.read(serverChoice)
-            if (read < 2 || serverChoice[1] != 0x00.toByte()) return
-
-            // SOCKS5 CONNECT request: VER=5, CMD=CONNECT, RSV=0, ATYP=IPV4, ADDR, PORT
             val addr = destIp.address
-            val request = byteArrayOf(
+            sout.write(byteArrayOf(
                 0x05, 0x01, 0x00, 0x01,
                 addr[0], addr[1], addr[2], addr[3],
                 (destPort shr 8).toByte(), (destPort and 0xFF).toByte()
-            )
-            sout.write(request)
+            ))
             sout.flush()
-
             val response = ByteArray(10)
-            read = sin.read(response)
-            if (read < 2 || response[1] != 0x00.toByte()) return  // non-success reply
+            if (sin.read(response) < 2 || response[1] != 0x00.toByte()) return
 
-            Log.d(TAG, "SOCKS5 tunnel established to $destIp:$destPort")
-
-            // Keep connection open briefly to let the tunnel stabilize
+            Log.d(TAG, "SOCKS5 tunnel open: $destIp:$destPort")
             Thread.sleep(100)
-
         } finally {
             try { sock.close() } catch (_: Exception) {}
         }
@@ -252,18 +208,11 @@ class RnetVpnService : VpnService() {
     private fun stopVpn() {
         serviceScope?.cancel()
         serviceScope = null
-
         try { vpnInterface?.close() } catch (_: Exception) {}
         vpnInterface = null
-
-        psiphonTransport?.stop()
-        psiphonTransport = null
-
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
-
-    // ----- Notifications -----
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -274,16 +223,13 @@ class RnetVpnService : VpnService() {
                 description = getString(R.string.notif_vpn_channel_desc)
                 setShowBadge(false)
             }
-            getSystemService(NotificationManager::class.java)
-                .createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
     private fun buildNotification(status: String): Notification {
         val tapIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
         val stopIntent = PendingIntent.getService(
             this, 2,
@@ -304,7 +250,6 @@ class RnetVpnService : VpnService() {
     }
 
     private fun updateNotification(status: String) {
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIF_ID, buildNotification(status))
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(status))
     }
 }

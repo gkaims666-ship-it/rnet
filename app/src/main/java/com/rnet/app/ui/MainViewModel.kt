@@ -56,13 +56,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleEngine(active: Boolean) {
         val ctx = getApplication<Application>().applicationContext
-        val intent = Intent(ctx, RnetForegroundService::class.java).apply {
-            action = if (active) RnetForegroundService.ACTION_START
-                     else        RnetForegroundService.ACTION_STOP
+        if (active) {
+            val intent = Intent(ctx, RnetForegroundService::class.java).apply {
+                action = RnetForegroundService.ACTION_START
+            }
+            ctx.startForegroundService(intent)
+        } else {
+            val intent = Intent(ctx, RnetForegroundService::class.java).apply {
+                action = RnetForegroundService.ACTION_STOP
+            }
+            ctx.startService(intent)
         }
-        if (active) ctx.startForegroundService(intent)
-        else        ctx.startService(intent)
-
         _ui.update { it.copy(engineActive = active) }
     }
 
