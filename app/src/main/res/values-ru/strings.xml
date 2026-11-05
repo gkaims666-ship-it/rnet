@@ -47,4 +47,33 @@
     <string name="mesh_gateway_active">Работает как шлюз ячеистой сети</string>
     <string name="notif_title">Транспорт RNET</string>
     <string name="notif_stop">Остановить</string>
+    <string name="notif_vpn_channel_name">RNET VPN</string>
+    <string name="notif_vpn_channel_desc">Статус VPN-туннеля RNET</string>
+
+    <!-- VPN status messages -->
+    <string name="vpn_status_connecting">Подключение…</string>
+    <string name="vpn_status_starting_tunnel">Запуск туннеля Psiphon…</string>
+    <string name="vpn_status_active">Активен — маршрутизация через Psiphon</string>
+    <string name="vpn_status_failed">Не удалось подключиться</string>
+
+    <!-- Resilient Core -->
+    <string name="resilient_core_title">Маршрут через Resilient Core</string>
+    <string name="resilient_core_disclosure">При включении трафик направляется через
+        децентрализованную сеть Psiphon (psiphon.ca) — открытый некоммерческий
+        сервис обхода блокировок. Psiphon видит факт подключения, но не содержимое
+        трафика — оно шифруется RNET. Применяется при следующем запуске.</string>
+
+    <!-- Server setup -->
+    <string name="server_setup_title">Настройка RNET</string>
+    <string name="server_setup_body">Введите адрес вашего ретрансляционного сервера RNET.
+        Разверните собственный ретранслятор одной командой — см. каталог deploy/.</string>
+    <string name="server_setup_host_label">Адрес ретранслятора (домен или IP)</string>
+    <string name="server_setup_port_label">UDP-порт</string>
+    <string name="server_setup_save">Сохранить и продолжить</string>
+    <string name="server_setup_hint">Нет ретранслятора? Выполните docker compose up в каталоге
+        deploy/ на любом Linux VPS.</string>
+    <string name="server_setup_error_host">Введите корректное имя хоста или IP-адрес</string>
+    <string name="server_setup_error_port">Порт должен быть от 1 до 65535</string>
+    <string name="server_setup_placeholder_host">relay.example.com</string>
+    <string name="server_setup_placeholder_port">7777</string>
 </resources>

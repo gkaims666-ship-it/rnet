@@ -11,8 +11,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.rnet.app.R
 import com.rnet.app.prefs.ServerPrefs
 
 /**
@@ -30,7 +32,7 @@ class ServerSetupActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = rnetDarkColorScheme()) {
                 ServerSetupScreen(
                     onSave = { host, port ->
                         ServerPrefs.save(this, host, port)
@@ -62,15 +64,14 @@ private fun ServerSetupScreen(onSave: (host: String, port: Int) -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "RNET Setup",
+            text = stringResource(R.string.server_setup_title),
             style = MaterialTheme.typography.headlineMedium
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Enter your RNET relay server address.\n" +
-                   "Deploy your own relay in one command — see deploy/ in the repository.",
+            text = stringResource(R.string.server_setup_body),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -80,10 +81,12 @@ private fun ServerSetupScreen(onSave: (host: String, port: Int) -> Unit) {
         OutlinedTextField(
             value = host,
             onValueChange = { host = it; hostError = false },
-            label = { Text("Relay host (domain or IP)") },
-            placeholder = { Text("relay.example.com") },
+            label = { Text(stringResource(R.string.server_setup_host_label)) },
+            placeholder = { Text(stringResource(R.string.server_setup_placeholder_host)) },
             isError = hostError,
-            supportingText = if (hostError) ({ Text("Enter a valid hostname or IP") }) else null,
+            supportingText = if (hostError) ({
+                Text(stringResource(R.string.server_setup_error_host))
+            }) else null,
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
@@ -94,10 +97,12 @@ private fun ServerSetupScreen(onSave: (host: String, port: Int) -> Unit) {
         OutlinedTextField(
             value = portText,
             onValueChange = { portText = it; portError = false },
-            label = { Text("UDP port") },
-            placeholder = { Text("7777") },
+            label = { Text(stringResource(R.string.server_setup_port_label)) },
+            placeholder = { Text(stringResource(R.string.server_setup_placeholder_port)) },
             isError = portError,
-            supportingText = if (portError) ({ Text("Port must be 1–65535") }) else null,
+            supportingText = if (portError) ({
+                Text(stringResource(R.string.server_setup_error_port))
+            }) else null,
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
@@ -117,14 +122,13 @@ private fun ServerSetupScreen(onSave: (host: String, port: Int) -> Unit) {
             },
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Save and continue")
+            Text(stringResource(R.string.server_setup_save))
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "No relay yet? Run docker compose up in the deploy/ directory\n" +
-                   "on any Linux VPS to start your relay server.",
+            text = stringResource(R.string.server_setup_hint),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

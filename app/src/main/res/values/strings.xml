@@ -62,6 +62,14 @@
     <!-- Notification -->
     <string name="notif_title">RNET Transport</string>
     <string name="notif_stop">Stop</string>
+    <string name="notif_vpn_channel_name">RNET VPN</string>
+    <string name="notif_vpn_channel_desc">RNET VPN tunnel status</string>
+
+    <!-- VPN status messages -->
+    <string name="vpn_status_connecting">Connecting…</string>
+    <string name="vpn_status_starting_tunnel">Starting Psiphon tunnel…</string>
+    <string name="vpn_status_active">Active — routing via Psiphon</string>
+    <string name="vpn_status_failed">Failed to connect</string>
 
     <!-- Resilient Core (Psiphon) opt-in -->
     <string name="resilient_core_title">Route via Resilient Core</string>
@@ -80,4 +88,8 @@
     <string name="server_setup_save">Save and continue</string>
     <string name="server_setup_hint">No relay yet? Run docker compose up in deploy/ on
         any Linux VPS.</string>
+    <string name="server_setup_error_host">Enter a valid hostname or IP</string>
+    <string name="server_setup_error_port">Port must be 1–65535</string>
+    <string name="server_setup_placeholder_host">relay.example.com</string>
+    <string name="server_setup_placeholder_port">7777</string>
 </resources>

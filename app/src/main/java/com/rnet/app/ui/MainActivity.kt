@@ -16,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -67,7 +68,7 @@ class MainActivity : ComponentActivity() {
         permissionsLauncher.launch(permissions.toTypedArray())
 
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = rnetDarkColorScheme()) {
                 val uiState by viewModel.ui.collectAsState()
                 RnetDashboard(
                     uiState    = uiState,
@@ -202,7 +203,7 @@ private fun ResilientCoreCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Route via Resilient Core",
+                    text = stringResource(R.string.resilient_core_title),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -210,12 +211,7 @@ private fun ResilientCoreCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "When enabled, your traffic is routed through the Psiphon " +
-                       "decentralized network (psiphon.ca) — an open-source, non-profit " +
-                       "censorship-circumvention service. " +
-                       "Psiphon can see that you are connected, but not the content of " +
-                       "your traffic, which is end-to-end encrypted by RNET. " +
-                       "Applies on next engine start.",
+                text = stringResource(R.string.resilient_core_disclosure),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -307,3 +303,27 @@ private fun formatBytes(bytes: Long): String = when {
     bytes >= 1_000L         -> "%.1f KB".format(bytes / 1_000f)
     else                    -> "$bytes B"
 }
+
+/** Dark color scheme used throughout the app. */
+@Composable
+fun rnetDarkColorScheme(): ColorScheme = darkColorScheme(
+    primary            = Color(0xFF82B4FF),   // bright blue accent
+    onPrimary          = Color(0xFF003062),
+    primaryContainer   = Color(0xFF1A3A5C),   // dark blue card header
+    onPrimaryContainer = Color(0xFFD6E4FF),
+    secondary          = Color(0xFF9FC8FF),
+    onSecondary        = Color(0xFF003258),
+    secondaryContainer = Color(0xFF1C3A5A),
+    onSecondaryContainer = Color(0xFFD0E4FF),
+    tertiary           = Color(0xFF78DCCA),   // teal for notices
+    onTertiary         = Color(0xFF003731),
+    background         = Color(0xFF0E1317),   // near-black background
+    onBackground       = Color(0xFFE2E8F0),
+    surface            = Color(0xFF161C22),   // card background
+    onSurface          = Color(0xFFE2E8F0),
+    surfaceVariant     = Color(0xFF1E2730),
+    onSurfaceVariant   = Color(0xFF90A4B4),   // muted label text
+    error              = Color(0xFFFFB4AB),
+    onError            = Color(0xFF690005),
+    outline            = Color(0xFF2D3A47)
+)

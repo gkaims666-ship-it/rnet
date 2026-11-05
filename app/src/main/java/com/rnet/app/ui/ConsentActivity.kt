@@ -30,7 +30,7 @@ class ConsentActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = rnetDarkColorScheme()) {
                 ConsentScreen(
                     onAccept = {
                         getSharedPreferences("rnet_prefs", MODE_PRIVATE)
