@@ -34,6 +34,7 @@ final class MultipathEngine: ObservableObject {
     private var remoteHost: String = "your.rnet.server.example.com"
     private var remotePort: NWEndpoint.Port = 7777
     private var sessionId: Int32 = Int32.random(in: 0..<Int32.max)
+    // Simple counter — class is @MainActor so all mutations are serialized
     private var sequenceCounter: Int32 = 0
 
     // Reassembly buffer: (sessionId << 32 | seq) → [shard_index: data]
@@ -41,7 +42,7 @@ final class MultipathEngine: ObservableObject {
 
     // MARK: - Start / Stop
 
-    func start(host: String, port: UInt16, sessionKey: Data) throws {
+    func start(host: String, port: UInt16, sessionKey: Data) async throws {
         guard !isActive else { return }
         cipher = try SessionCipher(keyBytes: sessionKey)
         remoteHost = host
@@ -100,11 +101,8 @@ final class MultipathEngine: ObservableObject {
     /// Encrypts, FEC-encodes and dispatches payload across all active paths.
     func send(_ payload: Data) async throws {
         guard let cipher = cipher, !connections.isEmpty else { return }
-        let seq = OSAtomicIncrement32(&sequenceCounter)
-
-        // Determine MTU from first connection's current path quality
-        let mtu = currentMtu()
-        let shardSize = min(mtu - 12, payload.count / 6 + 1) // rough shard sizing
+        sequenceCounter &+= 1
+        let seq = sequenceCounter
 
         // Encrypt full payload first
         let encrypted = try cipher.encrypt(payload)

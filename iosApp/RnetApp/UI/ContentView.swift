@@ -1,4 +1,5 @@
 import SwiftUI
+import MultipeerConnectivity
 
 /// Root SwiftUI view — mirrors Android MainActivity / MainScreen composable.
 struct ContentView: View {
@@ -157,15 +158,11 @@ struct MeshCard: View {
 
 struct MeshInvitationBanner: View {
     @EnvironmentObject var vm: RnetViewModel
-    let peer: AnyObject  // MCPeerID — erased for preview compatibility
-
-    var peerName: String {
-        (peer as? NSObject).flatMap { Mirror(reflecting: $0).children.first(where: { $0.label == "displayName" })?.value as? String } ?? "Unknown Peer"
-    }
+    let peer: MCPeerID
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Mesh connection request from \"\(peerName)\"")
+            Text("Mesh connection request from \"\(peer.displayName)\"")
                 .font(.subheadline)
                 .foregroundStyle(.primary)
 

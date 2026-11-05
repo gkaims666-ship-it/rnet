@@ -17,9 +17,9 @@ struct RnetApp: App {
                     }
                 }
                 .sheet(isPresented: $showSetup) {
-                    ServerSetupView {
+                    ServerSetupView(onSaved: {
                         showSetup = false
-                    }
+                    })
                     .interactiveDismissDisabled(true)   // must save before dismissing
                 }
         }

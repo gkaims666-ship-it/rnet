@@ -14,7 +14,11 @@ struct ServerSetupView: View {
     @State private var hostError = false
     @State private var portError = false
 
-    var onSaved: (() -> Void)?
+    var onSaved: (() -> Void)? = nil
+
+    init(onSaved: (() -> Void)? = nil) {
+        self.onSaved = onSaved
+    }
 
     var body: some View {
         NavigationStack {

@@ -68,7 +68,7 @@ final class RnetViewModel: ObservableObject {
                     let dummyKey = Data(repeating: 0xAB, count: 32)
                     try await engine.start(
                         host: ServerConfig.host,
-                        port: ServerConfig.port,
+                        port: UInt16(clamping: ServerConfig.port),
                         sessionKey: dummyKey
                     )
                     engineActive = true
@@ -100,7 +100,9 @@ final class RnetViewModel: ObservableObject {
             Task { await try? self?.engine.send(data) }
         }
         engine.inboundHandler = { [weak self] data in
-            try? self?.mesh.broadcast(data)
+            Task { @MainActor in
+                try? self?.mesh.broadcast(data)
+            }
         }
     }
 
