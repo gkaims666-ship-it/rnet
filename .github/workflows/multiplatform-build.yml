@@ -73,7 +73,7 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
 
       - name: Build release APK
-        if: startsWith(github.ref, 'refs/tags/') && secrets.KEYSTORE_BASE64 != ''
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           KEYSTORE_PATH:     ${{ runner.temp }}/release.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
