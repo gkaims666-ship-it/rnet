@@ -50,10 +50,10 @@ class MainActivity : ComponentActivity() {
         // Setup screen bypassed: app boots directly to Dashboard on first launch.
         // Zero-configuration emergency-launch mode — no relay setup required.
 
-        // Request minimum required permissions on first launch
+        // Request only runtime (dangerous) permissions on first launch.
+        // INTERNET and ACCESS_NETWORK_STATE are install-time (normal) permissions —
+        // passing them to RequestMultiplePermissions throws SecurityException on Android 6+.
         val permissions = buildList {
-            add(Manifest.permission.INTERNET)
-            add(Manifest.permission.ACCESS_NETWORK_STATE)
             add(Manifest.permission.ACCESS_FINE_LOCATION)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.POST_NOTIFICATIONS)
