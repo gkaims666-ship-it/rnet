@@ -239,7 +239,7 @@ private fun CardHeader(
 @Composable
 private fun EngineToggleCard(active: Boolean, onToggle: (Boolean) -> Unit) {
     val cardColor by animateColorAsState(
-        targetValue = if (active) Color(0xFF0D2137) else MaterialTheme.colorScheme.surface,
+        targetValue = if (active) Color(0xFF1A0A2E) else MaterialTheme.colorScheme.surface,
         animationSpec = tween(durationMillis = 400),
         label = "engineCard"
     )
@@ -318,9 +318,9 @@ private fun ResilientCoreCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                     CardHeader(
                         icon = Icons.Filled.Hub,
                         title = stringResource(R.string.resilient_core_title),
-                        iconTint = if (enabled) Color(0xFF78DCCA)
+                        iconTint = if (enabled) Color(0xFFCE93D8)
                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                        iconBg = if (enabled) Color(0xFF0D2D2A)
+                        iconBg = if (enabled) Color(0xFF2D0845)
                                  else MaterialTheme.colorScheme.surfaceVariant
                     )
                 }
@@ -350,8 +350,8 @@ private fun TelemetryCard(state: UiState) {
             CardHeader(
                 icon = Icons.Filled.SignalCellularAlt,
                 title = stringResource(R.string.telemetry_title),
-                iconTint = Color(0xFF64B5F6),
-                iconBg = Color(0xFF0D1E2D)
+                iconTint = Color(0xFFB39DDB),
+                iconBg = Color(0xFF1E0D35)
             )
             Spacer(Modifier.height(12.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
@@ -412,9 +412,9 @@ private fun GatewayCard(state: UiState, onToggle: (Boolean) -> Unit) {
                     CardHeader(
                         icon = Icons.Filled.WifiTethering,
                         title = stringResource(R.string.gateway_title),
-                        iconTint = if (state.gatewayActive) Color(0xFF78DCCA)
+                        iconTint = if (state.gatewayActive) Color(0xFFCE93D8)
                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                        iconBg = if (state.gatewayActive) Color(0xFF0D2D2A)
+                        iconBg = if (state.gatewayActive) Color(0xFF2D0845)
                                  else MaterialTheme.colorScheme.surfaceVariant
                     )
                     Spacer(Modifier.height(4.dp))
@@ -481,31 +481,31 @@ private fun formatBytes(bytes: Long): String = when {
     else                    -> "$bytes B"
 }
 
-/** Dark color scheme used throughout the app. */
+/** Dark color scheme used throughout the app — black and purple. */
 @Composable
 fun rnetDarkColorScheme(): ColorScheme = darkColorScheme(
-    primary              = Color(0xFF7CB9E8),   // soft steel blue
-    onPrimary            = Color(0xFF002E50),
-    primaryContainer     = Color(0xFF0A2540),   // very dark blue container
-    onPrimaryContainer   = Color(0xFFBDD8F5),
-    secondary            = Color(0xFF64B5F6),   // lighter blue accent
-    onSecondary          = Color(0xFF003258),
-    secondaryContainer   = Color(0xFF0D1E2D),
-    onSecondaryContainer = Color(0xFFBDD8F5),
-    tertiary             = Color(0xFF4DB6AC),   // muted teal for notices
-    onTertiary           = Color(0xFF002E2A),
-    tertiaryContainer    = Color(0xFF0A2522),
-    onTertiaryContainer  = Color(0xFFA7D5D0),
-    background           = Color(0xFF090D10),   // deep near-black
-    onBackground         = Color(0xFFDDE3EA),
-    surface              = Color(0xFF101620),   // card background — slightly blue-tinted
-    onSurface            = Color(0xFFDDE3EA),
-    surfaceVariant       = Color(0xFF161E28),   // slightly lighter than surface
-    onSurfaceVariant     = Color(0xFF7F96A8),   // muted label text — softer blue-grey
+    primary              = Color(0xFFCE93D8),   // soft lavender-purple
+    onPrimary            = Color(0xFF1A0028),
+    primaryContainer     = Color(0xFF2D0845),   // very dark purple container
+    onPrimaryContainer   = Color(0xFFEDD5F7),
+    secondary            = Color(0xFFB39DDB),   // muted violet accent
+    onSecondary          = Color(0xFF1A0040),
+    secondaryContainer   = Color(0xFF1E0D35),
+    onSecondaryContainer = Color(0xFFD8C8F0),
+    tertiary             = Color(0xFFF48FB1),   // soft pink accent for notices
+    onTertiary           = Color(0xFF2A0018),
+    tertiaryContainer    = Color(0xFF1E0010),
+    onTertiaryContainer  = Color(0xFFFFC8DB),
+    background           = Color(0xFF07040C),   // near-black with slight purple tint
+    onBackground         = Color(0xFFE8DFF0),
+    surface              = Color(0xFF0F0A18),   // card background — dark purple-black
+    onSurface            = Color(0xFFE8DFF0),
+    surfaceVariant       = Color(0xFF180F25),   // slightly lighter surface
+    onSurfaceVariant     = Color(0xFF9E8FB0),   // muted label — soft purple-grey
     error                = Color(0xFFEF9A9A),
     onError              = Color(0xFF4E0000),
     errorContainer       = Color(0xFF2A0A0A),
     onErrorContainer     = Color(0xFFFFCDD2),
-    outline              = Color(0xFF232E38),   // subtle separator
-    outlineVariant       = Color(0xFF1A2530)
+    outline              = Color(0xFF2E2040),   // subtle purple separator
+    outlineVariant       = Color(0xFF211530)
 )
