@@ -8,6 +8,7 @@ activityCompose         = "1.9.2"
 composeBom              = "2024.09.03"
 coroutines              = "1.9.0"
 bouncycastle            = "1.78.1"
+material                = "1.12.0"
 junit                   = "4.13.2"
 junitExt                = "1.2.1"
 espresso                = "3.6.1"
@@ -46,6 +47,7 @@ kotlinx-coroutines-core             = { group = "org.jetbrains.kotlinx", name = 
 
 # Convenience alias used in shared/build.gradle.kts
 bcprov                              = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+material                            = { group = "com.google.android.material", name = "material", version.ref = "material" }
 
 # Psiphon tunnel-core (GPL v3) — decentralized censorship-circumvention transport
 psiphon-tunnel                      = { group = "ca.psiphon", name = "psiphontunnel", version.ref = "psiphon" }
