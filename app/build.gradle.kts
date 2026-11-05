@@ -74,9 +74,15 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
-            // BC ships duplicate BC-related signature files; exclude them
+            // Bouncy Castle ships duplicate META-INF files across bcprov/bcpkix/bcutil JARs
             excludes += "META-INF/BCKEY.DSA"
             excludes += "META-INF/BCKEY.SF"
+            // All three BC JARs include this OSGI manifest — keep only one
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+            // Also exclude other common duplicates from BC and similar libs
+            excludes += "META-INF/*.SF"
+            excludes += "META-INF/*.DSA"
+            excludes += "META-INF/*.RSA"
         }
     }
 }
