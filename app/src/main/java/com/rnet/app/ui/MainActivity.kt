@@ -2,6 +2,7 @@ package com.rnet.app.ui
 
 import android.Manifest
 import android.content.Intent
+import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -19,6 +20,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.rnet.app.R
+import com.rnet.app.service.RnetVpnService
 
 class MainActivity : ComponentActivity() {
 
@@ -27,14 +29,19 @@ class MainActivity : ComponentActivity() {
     // Runtime permissions launcher
     private val permissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        val allGranted = results.values.all { it }
-        if (!allGranted) {
-            // Show rationale — handled in UI
+    ) { /* permissions result — app continues regardless */ }
+
+    // VPN permission launcher — Android requires explicit user approval before VpnService starts
+    private val vpnPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            // User approved VPN — start the service
+            startVpnService()
         }
     }
 
-    // Consent activity launcher
+    // Consent activity launcher (hotspot gateway)
     private val consentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -46,9 +53,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Setup screen bypassed: app boots directly to Dashboard on first launch.
-        // Zero-configuration emergency-launch mode — no relay setup required.
 
         // Request only runtime (dangerous) permissions on first launch.
         // INTERNET and ACCESS_NETWORK_STATE are install-time (normal) permissions —
@@ -67,7 +71,11 @@ class MainActivity : ComponentActivity() {
                 val uiState by viewModel.ui.collectAsState()
                 RnetDashboard(
                     uiState    = uiState,
-                    onEngineToggle  = { viewModel.toggleEngine(it) },
+                    onEngineToggle  = { wantOn ->
+                        if (wantOn) requestVpnAndStart()
+                        else stopVpnService()
+                        viewModel.toggleEngine(wantOn)
+                    },
                     onResilientCoreToggle = { viewModel.setUseResilientCore(it) },
                     onGatewayToggle = { wantOn ->
                         if (wantOn) {
@@ -85,6 +93,32 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    /** Request VPN permission if needed, then start the VPN service. */
+    private fun requestVpnAndStart() {
+        val vpnIntent = VpnService.prepare(this)
+        if (vpnIntent != null) {
+            // Need user approval — show the system VPN dialog
+            vpnPermissionLauncher.launch(vpnIntent)
+        } else {
+            // Already approved — start immediately
+            startVpnService()
+        }
+    }
+
+    private fun startVpnService() {
+        val intent = Intent(this, RnetVpnService::class.java).apply {
+            action = RnetVpnService.ACTION_START
+        }
+        startForegroundService(intent)
+    }
+
+    private fun stopVpnService() {
+        val intent = Intent(this, RnetVpnService::class.java).apply {
+            action = RnetVpnService.ACTION_STOP
+        }
+        startService(intent)
     }
 }
 
