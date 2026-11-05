@@ -68,7 +68,7 @@ private fun ConsentScreen(onAccept: () -> Unit, onDecline: () -> Unit) {
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
-            Divider()
+            HorizontalDivider()
 
             Text(
                 text = stringResource(R.string.consent_body_1),

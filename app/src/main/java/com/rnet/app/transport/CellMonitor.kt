@@ -58,28 +58,36 @@ class CellMonitor(private val context: Context) {
     }
 
     fun start() {
-        if (android.os.Build.VERSION.SDK_INT >= 31 && callback31 != null) {
-            telephonyManager.registerTelephonyCallback(
-                context.mainExecutor,
-                callback31!!
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            telephonyManager.listen(callback, PhoneStateListener.LISTEN_CELL_INFO)
-        }
-        // Initial snapshot
         try {
-            telephonyManager.allCellInfo?.forEach { parseCellInfo(it) }
-        } catch (_: SecurityException) {}
+            if (android.os.Build.VERSION.SDK_INT >= 31 && callback31 != null) {
+                telephonyManager.registerTelephonyCallback(
+                    context.mainExecutor,
+                    callback31!!
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                telephonyManager.listen(callback, PhoneStateListener.LISTEN_CELL_INFO)
+            }
+            // Initial snapshot
+            try {
+                telephonyManager.allCellInfo?.forEach { parseCellInfo(it) }
+            } catch (_: SecurityException) {}
+        } catch (_: SecurityException) {
+            // READ_PHONE_STATE not granted — cell monitoring unavailable, continue without it
+        } catch (_: Exception) {
+            // Any other telephony error — continue without cell monitoring
+        }
     }
 
     fun stop() {
-        if (android.os.Build.VERSION.SDK_INT >= 31 && callback31 != null) {
-            telephonyManager.unregisterTelephonyCallback(callback31!!)
-        } else {
-            @Suppress("DEPRECATION")
-            telephonyManager.listen(callback, PhoneStateListener.LISTEN_NONE)
-        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 31 && callback31 != null) {
+                telephonyManager.unregisterTelephonyCallback(callback31!!)
+            } else {
+                @Suppress("DEPRECATION")
+                telephonyManager.listen(callback, PhoneStateListener.LISTEN_NONE)
+            }
+        } catch (_: Exception) {}
     }
 
     private fun parseCellInfo(info: CellInfo) {
