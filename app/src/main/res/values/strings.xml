@@ -92,4 +92,76 @@
     <string name="server_setup_error_port">Port must be 1–65535</string>
     <string name="server_setup_placeholder_host">relay.example.com</string>
     <string name="server_setup_placeholder_port">7777</string>
+
+    <!-- FAQ button -->
+    <string name="faq_button">FAQ</string>
+    <string name="faq_title">About RNET</string>
+
+    <!-- FAQ sections -->
+    <string name="faq_q1">What is RNET?</string>
+    <string name="faq_a1">RNET is a multi-path encrypted transport tool. It routes your internet
+        traffic through multiple cellular network paths simultaneously, using Reed-Solomon
+        forward error correction (FEC) to recover lost packets. This makes the connection
+        more reliable even in areas with poor coverage.</string>
+
+    <string name="faq_q2">What does the "Multi-Path Transport" toggle do?</string>
+    <string name="faq_a2">This is the main on/off switch. When you enable it, RNET starts a VPN
+        tunnel on your device that captures all internet traffic and routes it through the
+        configured relay server using an encrypted multi-path protocol. Android will show a
+        VPN permission dialog on first use — this is required by Android for any app that
+        creates a VPN connection.</string>
+
+    <string name="faq_q3">What is "Route via Resilient Core"?</string>
+    <string name="faq_a3">When this is enabled, your traffic is routed through the Psiphon
+        decentralized network (psiphon.ca) before reaching the relay server. Psiphon is an
+        open-source, non-profit censorship-circumvention service operated by Psiphon Inc.,
+        a Canadian non-profit. Use this option if your connection to the relay server is
+        blocked or throttled. Psiphon can see that you are connected, but not the content
+        of your traffic, which is end-to-end encrypted by RNET.</string>
+
+    <string name="faq_q4">What is the Hotspot Gateway?</string>
+    <string name="faq_a4">The Hotspot Gateway lets other devices (phones, laptops, tablets)
+        connect to your phone\'s Wi-Fi hotspot and route their traffic through RNET. This
+        is useful when you need to share a protected connection. It requires explicit consent
+        because it routes third-party traffic — you must accept the disclosure screen before
+        it can be enabled. All traffic remains encrypted.</string>
+
+    <string name="faq_q5">What does the Link Telemetry section show?</string>
+    <string name="faq_a5">• Signal Quality (SNR) — an estimate of your cellular signal strength,
+        derived from RSRP (Reference Signal Received Power).
+\n• Packet Delivery Rate — the percentage of data packets that arrive successfully.
+\n• Radio Technology — the current mobile network type (LTE, 5G, etc.) and band.
+\n• Active Stations — the number of devices currently routed through the Hotspot Gateway.
+\n• Data Received / Sent — total bytes transferred during this session.</string>
+
+    <string name="faq_q6">How do I set up a relay server?</string>
+    <string name="faq_a6">RNET requires a self-hosted relay server. You can deploy one on any
+        Linux VPS (DigitalOcean, Hetzner, Vultr, etc.) with a single command:\n\n
+        docker compose up\n\nRun this in the deploy/ directory of the RNET repository.
+        Then enter the server\'s IP address and port (default 7777) in the RNET Setup screen.
+        If no relay is configured, RNET will fall back to Psiphon as the upstream transport.</string>
+
+    <string name="faq_q7">Why does RNET ask for VPN permission?</string>
+    <string name="faq_a7">Android requires explicit user approval before any app can create a
+        VPN tunnel. This is a security feature built into Android. RNET uses the VPN interface
+        only to capture traffic and route it through the configured relay server — it does not
+        connect to any external VPN provider.</string>
+
+    <string name="faq_q8">Is my traffic private?</string>
+    <string name="faq_a8">Your traffic is encrypted end-to-end between your device and the relay
+        server using AES-256-GCM. The relay server you configure is under your control. If you
+        also enable Resilient Core (Psiphon), Psiphon can see your connection metadata (IP address,
+        timing) but not the content of your traffic. RNET itself does not log or transmit any
+        traffic data to Anthropic or any other third party.</string>
+
+    <string name="faq_q9">What do I do if the VPN permission dialog crashes the app?</string>
+    <string name="faq_a9">This was a known issue in earlier versions caused by a timing problem
+        in the Psiphon startup sequence. It has been fixed. If you experience a crash, please
+        restart the app and try again. If it persists, go to Android Settings → Apps → RNET →
+        Permissions and check that VPN permission is not permanently denied.</string>
+
+    <string name="faq_q10">How do I completely stop RNET?</string>
+    <string name="faq_a10">Toggle the "Multi-Path Transport" switch to OFF on the main screen.
+        You can also tap "Stop" in the RNET notification in your notification shade. The VPN
+        tunnel and all background services will stop immediately.</string>
 </resources>

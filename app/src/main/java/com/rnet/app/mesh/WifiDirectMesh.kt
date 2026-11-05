@@ -88,7 +88,9 @@ class WifiDirectMesh(private val context: Context) {
     }
 
     fun shutdown() {
-        stopDiscovery()
+        if (::channel.isInitialized) {
+            stopDiscovery()
+        }
         sockets.values.forEach { runCatching { it.close() } }
         serverSocket?.close()
         try { context.unregisterReceiver(p2pReceiver) } catch (_: Exception) {}
@@ -98,6 +100,7 @@ class WifiDirectMesh(private val context: Context) {
     // ── Discovery ─────────────────────────────────────────────────────────────
 
     fun startDiscovery() {
+        if (!::channel.isInitialized) return
         _meshState.value = MeshState.DISCOVERING
         manager.discoverPeers(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {}
@@ -108,6 +111,7 @@ class WifiDirectMesh(private val context: Context) {
     }
 
     fun stopDiscovery() {
+        if (!::channel.isInitialized) return
         manager.stopPeerDiscovery(channel, null)
         _meshState.value = MeshState.IDLE
     }
@@ -218,9 +222,9 @@ class WifiDirectMesh(private val context: Context) {
 
     // ── Group Owner TCP server ────────────────────────────────────────────────
 
-    private fun startGroupOwnerServer() {
+    private suspend fun startGroupOwnerServer() {
         serverSocket = ServerSocket(DATA_PORT)
-        while (true) {
+        while (currentCoroutineContext().isActive) {
             try {
                 val client = serverSocket!!.accept()
                 val addr   = client.inetAddress.hostAddress ?: continue
@@ -232,9 +236,9 @@ class WifiDirectMesh(private val context: Context) {
 
     // ── Client connection ─────────────────────────────────────────────────────
 
-    private fun connectAsClient(goAddress: String) {
+    private suspend fun connectAsClient(goAddress: String) {
         var retries = 0
-        while (retries < 5) {
+        while (retries < 5 && currentCoroutineContext().isActive) {
             try {
                 val socket = Socket(goAddress, DATA_PORT)
                 sockets[goAddress] = socket
@@ -242,7 +246,7 @@ class WifiDirectMesh(private val context: Context) {
                 return
             } catch (_: Exception) {
                 retries++
-                Thread.sleep(1000L * retries)
+                delay(1000L * retries)   // suspend instead of blocking Thread.sleep
             }
         }
     }

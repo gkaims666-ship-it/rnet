@@ -59,8 +59,8 @@ class RnetForegroundService : Service() {
     private var psiphon: PsiphonTransport? = null
     private var gateway: HotspotGateway? = null
 
-    private var engineStarted  = false
-    private var gatewayStarted = false
+    @Volatile private var engineStarted  = false
+    @Volatile private var gatewayStarted = false
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -203,7 +203,9 @@ class RnetForegroundService : Service() {
             })
         } catch (_: Exception) {}
         activeSocksPort = 0
-        engine.stop()
+        if (::engine.isInitialized) {
+            runCatching { engine.stop() }
+        }
         psiphon?.stop()
         psiphon = null
         engineStarted = false

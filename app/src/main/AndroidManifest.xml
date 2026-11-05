@@ -25,6 +25,22 @@
     <!-- ── Wake lock to prevent CPU sleep during active transport ── -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- ── BLE (API 31+) ── -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Legacy BLE (API ≤ 30) -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+
+    <!-- ── Wi-Fi Direct (NEARBY_WIFI_DEVICES, API 33+) ── -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+
+    <!-- ── VPN foreground service type ── -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
     <application
         android:name=".RnetApplication"
         android:label="@string/app_name"
@@ -68,11 +84,18 @@
         <service
             android:name=".service.RnetVpnService"
             android:exported="false"
+            android:foregroundServiceType="connectedDevice"
             android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+
+        <!-- ── FAQ activity ── -->
+        <activity
+            android:name=".ui.FaqActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
 
     </application>
 

@@ -120,4 +120,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ServerPrefs.setUseResilientCore(getApplication(), enabled)
         _ui.update { it.copy(useResilientCore = enabled) }
     }
+
+    /** Force-set engine active flag without sending a service command (used for UI rollback). */
+    fun setEngineActive(active: Boolean) {
+        _ui.update { it.copy(engineActive = active) }
+    }
 }

@@ -46,7 +46,8 @@ class MultipathEngine(
     }
 
     private val fec = ReedSolomonFec(FEC_DATA, FEC_TOTAL - FEC_DATA)
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var networkCallbackRegistered = false
 
     // Active datagram sockets, one per network binding
     private val activePaths = ConcurrentHashMap<Network, DatagramSocket>()
@@ -80,6 +81,10 @@ class MultipathEngine(
     // ----- Lifecycle -----
 
     fun start(remoteHost: String, remotePort: Int) {
+        // Recreate scope if previously cancelled (e.g. after stop())
+        if (!scope.isActive) {
+            scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        }
         // Monitor RSRP for adaptive MTU
         scope.launch {
             cellMonitor.flow.collect { snap ->
@@ -92,11 +97,14 @@ class MultipathEngine(
         }
 
         // Request cellular networks (prefer low-band via scoring; we bind all)
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-        connectivityManager.registerNetworkCallback(request, networkCallback)
+        if (!networkCallbackRegistered) {
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            connectivityManager.registerNetworkCallback(request, networkCallback)
+            networkCallbackRegistered = true
+        }
 
         // Also bind any currently active cellular network immediately
         connectivityManager.activeNetwork?.let { net ->
@@ -111,8 +119,15 @@ class MultipathEngine(
     }
 
     fun stop() {
-        connectivityManager.unregisterNetworkCallback(networkCallback)
-        activePaths.values.forEach { it.close() }
+        if (networkCallbackRegistered) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback)
+            } catch (_: IllegalArgumentException) {
+                // Was never registered or already unregistered — safe to ignore
+            }
+            networkCallbackRegistered = false
+        }
+        activePaths.values.forEach { runCatching { it.close() } }
         activePaths.clear()
         scope.cancel()
     }
@@ -133,9 +148,12 @@ class MultipathEngine(
      * packet to verify the proxy is live, then marks the engine active.
      */
     fun startSocksPassthrough(proxyHost: String, proxyPort: Int) {
+        // Recreate scope if previously cancelled
+        if (!scope.isActive) {
+            scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        }
         android.util.Log.i("MultipathEngine",
             "Passthrough mode via SOCKS5 $proxyHost:$proxyPort")
-        // Wire up the SOCKS proxy as the single active path
         this.remoteAddress = java.net.InetSocketAddress(proxyHost, proxyPort)
     }
 

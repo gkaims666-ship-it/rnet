@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * BleMeshScanner — BLE advertise + scan for RNET peer discovery.
@@ -53,7 +54,7 @@ class BleMeshScanner(private val context: Context) {
         val rssi: Int
     )
 
-    private val seen = mutableMapOf<String, BlePeer>()
+    private val seen = ConcurrentHashMap<String, BlePeer>()
 
     // ── Advertising ───────────────────────────────────────────────────────────
 

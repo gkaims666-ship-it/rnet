@@ -5,6 +5,9 @@ import android.util.Log
 import ca.psiphon.PsiphonTunnel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CompletableDeferred
 import org.json.JSONObject
 
 /**
@@ -34,28 +37,41 @@ class PsiphonTransport(private val context: Context) : PsiphonTunnel.HostService
     val state: StateFlow<State> = _state
 
     /** SOCKS5 proxy port exposed by the Psiphon tunnel (0 = not yet assigned). */
-    private var socksProxyPort = 0
+    @Volatile private var socksProxyPort = 0
+
+    /** Signals when the first SOCKS port has been assigned by the callback. */
+    private var portReady: CompletableDeferred<Int> = CompletableDeferred()
 
     private val tunnel: PsiphonTunnel = PsiphonTunnel.newPsiphonTunnel(this)
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
 
     /**
-     * Starts the Psiphon tunnel. Blocks until the first server is connected,
-     * then returns the SOCKS5 proxy address the tunnel exposes locally.
-     * Call from a background coroutine.
+     * Starts the Psiphon tunnel. Blocks until the SOCKS5 port is assigned
+     * (i.e. until [onListeningSocksProxyPort] fires), then returns the proxy address.
+     * Times out after 60 seconds and throws if the port was never assigned.
+     * Call from a background coroutine / worker thread.
      */
     @Throws(Exception::class)
     fun start(): String {
+        // Reset deferred so a re-start after stop() works correctly
+        portReady = CompletableDeferred()
+        socksProxyPort = 0
         _state.value = State.CONNECTING
         tunnel.startTunneling("")
-        return "socks5://127.0.0.1:$socksProxyPort"
+        // Block here until onListeningSocksProxyPort fires (or timeout)
+        val port = runBlocking {
+            withTimeoutOrNull(60_000L) { portReady.await() }
+        } ?: throw Exception("Psiphon SOCKS port not assigned within 60 s")
+        return "socks5://127.0.0.1:$port"
     }
 
     fun stop() {
         tunnel.stop()
         _state.value = State.STOPPED
         socksProxyPort = 0
+        // Cancel any pending waiters so a stalled start() can unblock
+        if (!portReady.isCompleted) portReady.cancel()
     }
 
     // ── PsiphonTunnel.HostService — required methods ───────────────────────────
@@ -84,6 +100,7 @@ class PsiphonTransport(private val context: Context) : PsiphonTunnel.HostService
 
     override fun onListeningSocksProxyPort(port: Int) {
         socksProxyPort = port
+        portReady.complete(port)   // unblock start()
         Log.i(TAG, "SOCKS5 proxy on port $port")
     }
 

@@ -86,7 +86,14 @@ class HotspotGateway(
         // Listen for inbound connections from tethered clients (gateway address)
         // Android assigns 192.168.43.1 or 10.0.0.1 as the softAP gateway
         scope.launch {
-            proxyServer = ServerSocket(PROXY_PORT, 50, InetAddress.getByName("0.0.0.0"))
+            val serverSocket = try {
+                ServerSocket(PROXY_PORT, 50, InetAddress.getByName("0.0.0.0"))
+            } catch (e: Exception) {
+                android.util.Log.e("HotspotGateway",
+                    "Could not bind to port $PROXY_PORT: ${e.message}")
+                return@launch
+            }
+            proxyServer = serverSocket
             while (isActive) {
                 try {
                     val client = proxyServer!!.accept()

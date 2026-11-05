@@ -12,11 +12,18 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.SignalCellularAlt
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -40,8 +47,10 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode == RESULT_OK) {
             // VPN permission granted — now start the foreground engine service
             viewModel.toggleEngine(true)
+        } else {
+            // User denied — revert the optimistic switch state to OFF
+            viewModel.setEngineActive(false)
         }
-        // If denied: do nothing; UI switch should revert (handled by state flow)
     }
 
     // Consent activity launcher (hotspot gateway)
@@ -76,7 +85,8 @@ class MainActivity : ComponentActivity() {
                     uiState    = uiState,
                     onEngineToggle  = { wantOn ->
                         if (wantOn) {
-                            // Request VPN permission first; engine starts in the callback
+                            // Optimistically show ON; revert in launcher if denied
+                            viewModel.setEngineActive(true)
                             requestVpnPermission()
                         } else {
                             viewModel.toggleEngine(false)
@@ -95,6 +105,9 @@ class MainActivity : ComponentActivity() {
                         } else {
                             viewModel.toggleGateway(false)
                         }
+                    },
+                    onFaqClick = {
+                        startActivity(Intent(this, FaqActivity::class.java))
                     }
                 )
             }
@@ -124,12 +137,27 @@ fun RnetDashboard(
     uiState: UiState,
     onEngineToggle: (Boolean) -> Unit,
     onGatewayToggle: (Boolean) -> Unit,
-    onResilientCoreToggle: (Boolean) -> Unit = {}
+    onResilientCoreToggle: (Boolean) -> Unit = {},
+    onFaqClick: () -> Unit = {}
 ) {
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name)) },
+                actions = {
+                    TextButton(onClick = onFaqClick) {
+                        Icon(
+                            imageVector = Icons.Filled.Info,
+                            contentDescription = stringResource(R.string.faq_button),
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = stringResource(R.string.faq_button),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
                 )
@@ -160,8 +188,38 @@ fun RnetDashboard(
 }
 
 @Composable
+private fun CardHeader(
+    icon: ImageVector,
+    title: String,
+    iconTint: Color = MaterialTheme.colorScheme.primary
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = iconTint,
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
 private fun EngineToggleCard(active: Boolean, onToggle: (Boolean) -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (active)
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+            else
+                MaterialTheme.colorScheme.surface
+        )
+    ) {
         Row(
             modifier = Modifier
                 .padding(20.dp)
@@ -169,12 +227,14 @@ private fun EngineToggleCard(active: Boolean, onToggle: (Boolean) -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
-                Text(
-                    text = stringResource(R.string.engine_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
+            Column(modifier = Modifier.weight(1f)) {
+                CardHeader(
+                    icon = Icons.Filled.Shield,
+                    title = stringResource(R.string.engine_title),
+                    iconTint = if (active) MaterialTheme.colorScheme.primary
+                               else MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(Modifier.height(4.dp))
                 Text(
                     text = if (active) stringResource(R.string.engine_status_active)
                            else        stringResource(R.string.engine_status_inactive),
@@ -197,10 +257,9 @@ private fun ResilientCoreCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = stringResource(R.string.resilient_core_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
+                CardHeader(
+                    icon = Icons.Filled.Router,
+                    title = stringResource(R.string.resilient_core_title)
                 )
                 Switch(checked = enabled, onCheckedChange = onToggle)
             }
@@ -221,10 +280,9 @@ private fun TelemetryCard(state: UiState) {
             modifier = Modifier.padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = stringResource(R.string.telemetry_title),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
+            CardHeader(
+                icon = Icons.Filled.SignalCellularAlt,
+                title = stringResource(R.string.telemetry_title)
             )
             HorizontalDivider()
             MetricRow(label = stringResource(R.string.metric_snr),
@@ -253,12 +311,12 @@ private fun GatewayCard(state: UiState, onToggle: (Boolean) -> Unit) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = stringResource(R.string.gateway_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
+                Column(modifier = Modifier.weight(1f)) {
+                    CardHeader(
+                        icon = Icons.Filled.Wifi,
+                        title = stringResource(R.string.gateway_title)
                     )
+                    Spacer(Modifier.height(4.dp))
                     Text(
                         text = stringResource(R.string.gateway_subtitle),
                         style = MaterialTheme.typography.bodySmall,
