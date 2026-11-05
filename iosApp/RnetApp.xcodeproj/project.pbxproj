@@ -1,0 +1,392 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A001000001000001 /* RnetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A001000000000001 /* RnetApp.swift */; };
+		A001000001000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A001000000000002 /* ContentView.swift */; };
+		A001000001000003 /* ServerSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A001000000000003 /* ServerSetupView.swift */; };
+		A001000001000004 /* RnetViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A001000000000004 /* RnetViewModel.swift */; };
+		A001000001000005 /* MultipathEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A001000000000005 /* MultipathEngine.swift */; };
+		A001000001000006 /* HybridKeyExchange.swift in Sources */ = {isa = PBXBuildFile; fileRef = A001000000000006 /* HybridKeyExchange.swift */; };
+		A001000001000007 /* SessionCipher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A001000000000007 /* SessionCipher.swift */; };
+		A001000001000008 /* MultipeerMesh.swift in Sources */ = {isa = PBXBuildFile; fileRef = A001000000000008 /* MultipeerMesh.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A001000000000000 /* RnetApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RnetApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A001000000000001 /* RnetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RnetApp.swift; sourceTree = "<group>"; };
+		A001000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A001000000000003 /* ServerSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerSetupView.swift; sourceTree = "<group>"; };
+		A001000000000004 /* RnetViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RnetViewModel.swift; sourceTree = "<group>"; };
+		A001000000000005 /* MultipathEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipathEngine.swift; sourceTree = "<group>"; };
+		A001000000000006 /* HybridKeyExchange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HybridKeyExchange.swift; sourceTree = "<group>"; };
+		A001000000000007 /* SessionCipher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCipher.swift; sourceTree = "<group>"; };
+		A001000000000008 /* MultipeerMesh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipeerMesh.swift; sourceTree = "<group>"; };
+		A001000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A001000003000000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A001000004000000 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A001000000000000 /* RnetApp.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A001000004000001 /* RnetApp */ = {
+			isa = PBXGroup;
+			children = (
+				A001000000000001 /* RnetApp.swift */,
+				A001000000000009 /* Info.plist */,
+				A001000004000002 /* UI */,
+				A001000004000003 /* ViewModel */,
+				A001000004000004 /* Transport */,
+				A001000004000005 /* Crypto */,
+				A001000004000006 /* Mesh */,
+			);
+			path = RnetApp;
+			sourceTree = "<group>";
+		};
+		A001000004000002 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				A001000000000002 /* ContentView.swift */,
+				A001000000000003 /* ServerSetupView.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		A001000004000003 /* ViewModel */ = {
+			isa = PBXGroup;
+			children = (
+				A001000000000004 /* RnetViewModel.swift */,
+			);
+			path = ViewModel;
+			sourceTree = "<group>";
+		};
+		A001000004000004 /* Transport */ = {
+			isa = PBXGroup;
+			children = (
+				A001000000000005 /* MultipathEngine.swift */,
+			);
+			path = Transport;
+			sourceTree = "<group>";
+		};
+		A001000004000005 /* Crypto */ = {
+			isa = PBXGroup;
+			children = (
+				A001000000000006 /* HybridKeyExchange.swift */,
+				A001000000000007 /* SessionCipher.swift */,
+			);
+			path = Crypto;
+			sourceTree = "<group>";
+		};
+		A001000004000006 /* Mesh */ = {
+			isa = PBXGroup;
+			children = (
+				A001000000000008 /* MultipeerMesh.swift */,
+			);
+			path = Mesh;
+			sourceTree = "<group>";
+		};
+		A001000004000007 = {
+			isa = PBXGroup;
+			children = (
+				A001000004000001 /* RnetApp */,
+				A001000004000000 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A001000005000000 /* RnetApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A001000007000001 /* Build configuration list for PBXNativeTarget "RnetApp" */;
+			buildPhases = (
+				A001000002000000 /* Sources */,
+				A001000003000000 /* Frameworks */,
+				A001000003000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RnetApp;
+			productName = RnetApp;
+			productReference = A001000000000000 /* RnetApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A001000006000000 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1540;
+				LastUpgradeCheck = 1540;
+				TargetAttributes = {
+					A001000005000000 = {
+						CreatedOnToolsVersion = 15.4;
+					};
+				};
+			};
+			buildConfigurationList = A001000007000000 /* Build configuration list for PBXProject "RnetApp" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A001000004000007;
+			productRefGroup = A001000004000000 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A001000005000000 /* RnetApp */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A001000003000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A001000002000000 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A001000001000001 /* RnetApp.swift in Sources */,
+				A001000001000002 /* ContentView.swift in Sources */,
+				A001000001000003 /* ServerSetupView.swift in Sources */,
+				A001000001000004 /* RnetViewModel.swift in Sources */,
+				A001000001000005 /* MultipathEngine.swift in Sources */,
+				A001000001000006 /* HybridKeyExchange.swift in Sources */,
+				A001000001000007 /* SessionCipher.swift in Sources */,
+				A001000001000008 /* MultipeerMesh.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A001000007000002 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A001000007000003 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A001000007000004 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = RnetApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rnet.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A001000007000005 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = RnetApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rnet.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A001000007000000 /* Build configuration list for PBXProject "RnetApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A001000007000002 /* Debug */,
+				A001000007000003 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A001000007000001 /* Build configuration list for PBXNativeTarget "RnetApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A001000007000004 /* Debug */,
+				A001000007000005 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = A001000006000000 /* Project object */;
+}
