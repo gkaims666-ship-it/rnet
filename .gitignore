@@ -1,0 +1,27 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+local.properties
+
+# Android / IntelliJ
+*.iml
+.idea/
+*.class
+*.apk
+*.aab
+
+# KMP / iOS
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.ipa
+Pods/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Kotlin
+*.kotlin_module
