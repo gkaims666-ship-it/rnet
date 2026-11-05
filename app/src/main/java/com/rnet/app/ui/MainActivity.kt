@@ -8,7 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import com.rnet.app.prefs.ServerPrefs
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -201,7 +200,7 @@ private fun TelemetryCard(state: UiState) {
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
-            Divider()
+            HorizontalDivider()
             MetricRow(label = stringResource(R.string.metric_snr),
                       value = "%.0f%%".format(state.snr))
             MetricRow(label = stringResource(R.string.metric_pdr),

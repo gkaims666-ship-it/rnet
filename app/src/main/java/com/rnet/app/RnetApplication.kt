@@ -7,9 +7,12 @@ import java.security.Security
 class RnetApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        // Register Bouncy Castle as the first security provider so ML-KEM / Kyber
-        // lookups resolve before the default Android providers.
-        Security.removeProvider("BC")  // Remove any old BC installation
-        Security.insertProviderAt(BouncyCastleProvider(), 1)
+        // Register Bouncy Castle for ML-KEM / Kyber lookups.
+        // Insert AFTER AndroidOpenSSL (position 1 conflicts with Android's SSL stack
+        // on API 29+ and causes a crash). We append at the end so Android's own
+        // providers stay undisturbed; BC is only used for PQC operations.
+        if (Security.getProvider("BC") == null) {
+            Security.addProvider(BouncyCastleProvider())
+        }
     }
 }
