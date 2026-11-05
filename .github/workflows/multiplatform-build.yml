@@ -116,14 +116,21 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build RnetShared.xcframework
+      - name: Build RnetShared framework (release tags only)
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
-          # KMP 2.x XCFramework task name: assembleXCFramework (universal, all variants)
-          ./gradlew :shared:assembleRnetSharedReleaseXCFramework --no-daemon \
-            -Pkotlin.native.ignoreDisabledTargets=true 2>/dev/null || \
-          ./gradlew :shared:assembleXCFramework --no-daemon \
+          # Build arm64 framework for device archiving (release tags only)
+          ./gradlew :shared:linkReleaseFrameworkIosArm64 --no-daemon \
             -Pkotlin.native.ignoreDisabledTargets=true
-          # Output: shared/build/XCFrameworks/release/RnetShared.xcframework
+          # Output: shared/build/bin/iosArm64/releaseFramework/RnetShared.framework
+
+      - name: Build RnetShared framework (simulator — non-tag)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        run: |
+          # Build arm64 simulator framework for simulator build
+          ./gradlew :shared:linkDebugFrameworkIosSimulatorArm64 --no-daemon \
+            -Pkotlin.native.ignoreDisabledTargets=true
+          # Output: shared/build/bin/iosSimulatorArm64/debugFramework/RnetShared.framework
 
       # ---- Codesigning setup ----
       - name: Import code-signing certificate

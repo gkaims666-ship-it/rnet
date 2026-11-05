@@ -12,9 +12,6 @@ kotlin {
         }
     }
 
-    // Register XCFramework so assembleRnetSharedReleaseXCFramework task exists for CI
-    val xcf = org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework("RnetShared")
-
     listOf(
         iosX64(),
         iosArm64(),
@@ -23,7 +20,6 @@ kotlin {
         iosTarget.binaries.framework {
             baseName = "RnetShared"
             isStatic = true
-            xcf.add(this)
         }
     }
 
