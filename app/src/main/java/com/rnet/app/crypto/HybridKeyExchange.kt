@@ -16,31 +16,14 @@ import javax.crypto.spec.SecretKeySpec
  * Architecture:
  *   shared_secret = KDF( X25519_shared || KEM_shared, transcript )
  *
- * ML-KEM-768 is provided via Bouncy Castle (bcprov-jdk18on). X25519 is provided via
- * the Android/JVM built-in XDH provider. The final 32-byte session key feeds the
- * AES-256-GCM AEAD layer in SessionCipher.
- *
- * Key generation timeline (initiator side):
- *   1. generateX25519KeyPair()          → ephemeral Diffie-Hellman keypair
- *   2. generateKemKeyPair()             → ML-KEM-768 keypair
- *   3. Send   [ x25519.public | kem.public ] to responder
- *   4. Receive [ x25519.public | ciphertext ] from responder
- *   5. deriveSharedSecret(...)          → 32-byte session key
- *
- * Responder side:
- *   1. Receive [ x25519.public | kem.public ]
- *   2. generateX25519KeyPair()
- *   3. encapsulate(kem.public)          → (ciphertext, kem_shared)
- *   4. Send   [ x25519.public | ciphertext ]
- *   5. deriveSharedSecret(...)          → same 32-byte session key
+ * ML-KEM-768 is provided via Bouncy Castle (bcprov-jdk18on) using the low-level
+ * crypto API directly (the JCA wrapper's key params are package-private).
+ * X25519 is provided via the Android/JVM built-in XDH provider.
+ * The final 32-byte session key feeds the AES-256-GCM AEAD layer in SessionCipher.
  */
 object HybridKeyExchange {
 
     private const val TAG = "HybridKEX"
-
-    private val bcProvider by lazy {
-        org.bouncycastle.jce.provider.BouncyCastleProvider()
-    }
 
     // -------------------------------------------------------------------------
     // X25519 (ECDH on Curve25519)
@@ -60,36 +43,50 @@ object HybridKeyExchange {
     }
 
     // -------------------------------------------------------------------------
-    // ML-KEM-768 (via Bouncy Castle JCA — KYBER768)
+    // ML-KEM-768 — raw Bouncy Castle crypto layer (avoids package-private JCA)
     // -------------------------------------------------------------------------
 
-    fun generateKemKeyPair(): KeyPair {
-        val kpg = KeyPairGenerator.getInstance("KYBER768", bcProvider)
-        kpg.initialize(
-            org.bouncycastle.pqc.jcajce.spec.KyberParameterSpec.kyber768,
-            SecureRandom()
+    /**
+     * Wraps the raw Kyber key-pair so callers don't need BC imports.
+     */
+    data class KemKeyPair(
+        val publicKey: org.bouncycastle.pqc.crypto.crystals.kyber.KyberPublicKeyParameters,
+        val privateKey: org.bouncycastle.pqc.crypto.crystals.kyber.KyberPrivateKeyParameters
+    )
+
+    fun generateKemKeyPair(): KemKeyPair {
+        val gen = org.bouncycastle.pqc.crypto.crystals.kyber.KyberKeyPairGenerator()
+        gen.init(org.bouncycastle.pqc.crypto.crystals.kyber.KyberKeyGenerationParameters(
+            SecureRandom(),
+            org.bouncycastle.pqc.crypto.crystals.kyber.KyberParameters.kyber768
+        ))
+        val kp = gen.generateKeyPair()
+        return KemKeyPair(
+            publicKey  = kp.public  as org.bouncycastle.pqc.crypto.crystals.kyber.KyberPublicKeyParameters,
+            privateKey = kp.private as org.bouncycastle.pqc.crypto.crystals.kyber.KyberPrivateKeyParameters
         )
-        return kpg.generateKeyPair()
     }
 
     /**
      * Encapsulate: generate a fresh shared secret and encrypt it under [recipientPublicKey].
      * Returns Pair(ciphertext, sharedSecret).
      */
-    fun kemEncapsulate(recipientPublicKey: PublicKey): Pair<ByteArray, ByteArray> {
-        val bcPub = recipientPublicKey as org.bouncycastle.pqc.jcajce.provider.kyber.BCKyberPublicKey
-        val kyberPub = bcPub.keyParams
+    fun kemEncapsulate(
+        recipientPublicKey: org.bouncycastle.pqc.crypto.crystals.kyber.KyberPublicKeyParameters
+    ): Pair<ByteArray, ByteArray> {
         val kem = org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMGenerator(SecureRandom())
-        val kemResult = kem.generateEncapsulated(kyberPub)
-        return Pair(kemResult.encapsulation, kemResult.secret)
+        val result = kem.generateEncapsulated(recipientPublicKey)
+        return Pair(result.encapsulation, result.secret)
     }
 
     /**
      * Decapsulate: recover shared secret from [ciphertext] using [privateKey].
      */
-    fun kemDecapsulate(privateKey: java.security.PrivateKey, ciphertext: ByteArray): ByteArray {
-        val bcPriv = privateKey as org.bouncycastle.pqc.jcajce.provider.kyber.BCKyberPrivateKey
-        val extractor = org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMExtractor(bcPriv.keyParams)
+    fun kemDecapsulate(
+        privateKey: org.bouncycastle.pqc.crypto.crystals.kyber.KyberPrivateKeyParameters,
+        ciphertext: ByteArray
+    ): ByteArray {
+        val extractor = org.bouncycastle.pqc.crypto.crystals.kyber.KyberKEMExtractor(privateKey)
         return extractor.extractSecret(ciphertext)
     }
 
