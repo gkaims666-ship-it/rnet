@@ -100,7 +100,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val intent = Intent(ctx, RnetForegroundService::class.java).apply {
                 action = RnetForegroundService.ACTION_STOP
             }
-            ctx.startService(intent)
+            // Android 8+ (API 26+): startService() throws IllegalStateException when
+            // the app is in the background. The service is already running as a foreground
+            // service, so startForegroundService() is correct for all interactions —
+            // the service receives the intent in onStartCommand() regardless of action.
+            ctx.startForegroundService(intent)
         }
         _ui.update { it.copy(engineActive = active) }
     }
@@ -111,7 +115,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             action = if (active) RnetForegroundService.ACTION_GATEWAY_START
                      else        RnetForegroundService.ACTION_GATEWAY_STOP
         }
-        ctx.startService(intent)
+        ctx.startForegroundService(intent)
         _ui.update { it.copy(gatewayActive = active) }
     }
 
@@ -178,7 +182,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 action = RnetForegroundService.ACTION_CHANGE_REGION
                 putExtra(RnetForegroundService.EXTRA_REGION, region)
             }
-            ctx.startService(intent)
+            ctx.startForegroundService(intent)
         }
     }
 }

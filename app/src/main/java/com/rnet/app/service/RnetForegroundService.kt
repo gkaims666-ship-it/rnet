@@ -244,7 +244,18 @@ class RnetForegroundService : VpnService() {
         activeSocksPort = 0; activeBytesIn.set(0); activeBytesOut.set(0)
         activeSessionCount.set(0); routeCacheSize = 0; pooledSockets = 0
         postNotif()
-        if (!gwStarted) stopSelf()
+        if (!gwStarted) {
+            // Remove the persistent notification and stop the foreground service properly.
+            // stopForeground() must be called before stopSelf() on Android 12+ (API 31+)
+            // to remove the notification; stopSelf() alone leaves it stuck.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            stopSelf()
+        }
     }
 
     // ── Live region hot-swap (no VPN disconnect needed) ───────────────────────
