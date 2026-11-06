@@ -400,126 +400,69 @@ class RnetForegroundService : VpnService() {
 
     // ── Exit IP verification ──────────────────────────────────────────────────
     /**
-     * After a tunnel is established, connect to a lightweight IP-echo endpoint
-     * *through the SOCKS5 proxy* and check the actual exit IP's geolocation.
-     * Updates exitRegion and proxyLabel if the actual exit country differs from
-     * what we requested (Psiphon sometimes routes through intermediate relays
-     * that have different geolocations).
+     * After a tunnel is established, check the actual exit IP country by connecting
+     * to ipinfo.io/country *through the SOCKS5 proxy* using ATYP=3 (domain name).
      *
-     * We use ipinfo.io/json — tiny JSON response (~200 bytes), reliable, free.
-     * Connecting through the SOCKS5 proxy ensures we see the exit IP, not our real IP.
+     * IMPORTANT — no DoH inside this function.
+     * DoH requests go through HttpsURLConnection, which the VPN tun intercepts and
+     * routes back through SOCKS5 → creating a routing loop that hangs all traffic.
+     * Instead we use SOCKS5 ATYP=3 (hostname CONNECT) so the proxy resolves the
+     * hostname externally without touching the tun at all.
      */
     private suspend fun verifyExitIpAndUpdateRegion(socksPort: Int, requestedRegion: String) =
         withContext(Dispatchers.IO) {
         if (!engineStarted) return@withContext
+        // Small delay so the tunnel is fully warmed before probing
+        delay(3_000L)
+        if (!engineStarted) return@withContext
         try {
-            // Connect to ipinfo.io through the Psiphon SOCKS5 tunnel
-            val ipinfoHost = "ipinfo.io"
-            val ipinfoPort = 443
+            val host = "ipinfo.io"
+            val port = 80  // plain HTTP — simpler, no TLS setup, tiny response
 
-            // Resolve ipinfo.io via DoH first
-            val ipBytes = resolveHostViaDoh(ipinfoHost) ?: return@withContext
-            val ipinfoAddr = InetAddress.getByAddress(ipBytes)
-
-            // Connect via SOCKS5 proxy and do a minimal HTTPS GET
+            // Connect to the SOCKS5 proxy directly (127.0.0.1) — bypasses the tun fd
             val s = Socket()
-            protect(s)
-            s.soTimeout = 8000
-            s.connect(InetSocketAddress("127.0.0.1", socksPort), 5000)
+            protect(s)   // protect so the socket doesn't loop back through the tun
+            s.soTimeout = 10_000
+            s.connect(InetSocketAddress("127.0.0.1", socksPort), 5_000)
             val sin = s.getInputStream(); val sout = s.getOutputStream()
+
             // SOCKS5 greeting
             sout.write(byteArrayOf(0x05, 0x01, 0x00)); sout.flush()
             val gr = ByteArray(2); sin.read(gr)
             if (gr[0] != 0x05.toByte() || gr[1] != 0x00.toByte()) { s.close(); return@withContext }
-            // CONNECT request by IP
-            val ip = ipinfoAddr.address
-            val req = ByteArray(10).also { r ->
-                r[0] = 0x05; r[1] = 0x01; r[2] = 0x00; r[3] = 0x01
-                ip.copyInto(r, 4)
-                r[8] = (ipinfoPort shr 8).toByte(); r[9] = (ipinfoPort and 0xFF).toByte()
+
+            // SOCKS5 CONNECT with ATYP=3 (hostname) — proxy resolves DNS externally
+            val hostBytes = host.toByteArray(Charsets.US_ASCII)
+            val req = ByteArray(7 + hostBytes.size).also { r ->
+                r[0] = 0x05; r[1] = 0x01; r[2] = 0x00
+                r[3] = 0x03                         // ATYP = domain name
+                r[4] = hostBytes.size.toByte()
+                hostBytes.copyInto(r, 5)
+                r[5 + hostBytes.size] = (port shr 8).toByte()
+                r[6 + hostBytes.size] = (port and 0xFF).toByte()
             }
             sout.write(req); sout.flush()
             val resp = ByteArray(10); sin.read(resp)
             if (resp[0] != 0x05.toByte() || resp[1] != 0x00.toByte()) { s.close(); return@withContext }
-            s.soTimeout = 0
 
-            // Wrap in TLS and send HTTP GET
-            val tlsFactory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
-            val tls = tlsFactory.createSocket(s, ipinfoHost, ipinfoPort, true) as javax.net.ssl.SSLSocket
-            tls.soTimeout = 8000
-            tls.startHandshake()
-            val tout = tls.getOutputStream()
-            tout.write("GET /country HTTP/1.1\r\nHost: ipinfo.io\r\nConnection: close\r\n\r\n".toByteArray())
-            tout.flush()
-            val body = tls.inputStream.bufferedReader().readText()
-            tls.close()
+            // Plain HTTP GET /country — returns just the 2-letter country code
+            sout.write("GET /country HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray())
+            sout.flush()
+            val body = sin.bufferedReader().readText()
+            s.close()
 
-            // Response is just the 2-letter country code e.g. "IS\n" after HTTP headers
+            // Response body is the 2-letter country code after the HTTP headers
             val country = body.substringAfterLast("\r\n\r\n").trim().take(2).uppercase()
             if (country.length == 2 && country.all { it.isLetter() }) {
-                Log.i(TAG, "Actual exit country: $country (requested: $requestedRegion)")
-                if (country != requestedRegion) {
-                    Log.w(TAG, "Exit country mismatch — Psiphon routing via $country instead of $requestedRegion")
-                }
+                Log.i(TAG, "Actual exit: $country (requested: $requestedRegion)")
                 exitRegion = country
                 proxyLabel = "Smart·$country"
-                // Update GPS mock to match actual exit country
                 LocationMasker.start(applicationContext, country)
                 postNotif()
             }
         } catch (e: Exception) {
-            Log.d(TAG, "Exit IP check failed (non-critical): ${e.message}")
-            // Not fatal — UI still shows requested region
+            Log.d(TAG, "Exit IP check skipped: ${e.message}")
         }
-    }
-
-    /** Resolve a hostname to its IPv4 address bytes using DoH, synchronously. */
-    private fun resolveHostViaDoh(host: String): ByteArray? {
-        return try {
-            // Build a minimal DNS A query for the host
-            val labels = host.split('.')
-            val qname = labels.flatMap { label ->
-                val b = label.toByteArray(Charsets.US_ASCII)
-                listOf(b.size.toByte()) + b.toList()
-            } + listOf(0.toByte())
-            val query = ByteArray(12 + qname.size + 4)
-            // ID = 0x0001, QR=0 (query), RD=1
-            query[0] = 0x00; query[1] = 0x01
-            query[2] = 0x01; query[3] = 0x00  // flags: RD=1
-            query[4] = 0x00; query[5] = 0x01  // QDCOUNT = 1
-            qname.forEachIndexed { i, b -> query[12 + i] = b }
-            val off = 12 + qname.size
-            query[off] = 0x00; query[off+1] = 0x01  // QTYPE A
-            query[off+2] = 0x00; query[off+3] = 0x01 // QCLASS IN
-
-            val resp = DoHResolver.resolveParallel(query) ?: return null
-            // Parse first A record from answer
-            if (resp.size < 12) return null
-            val anCount = ((resp[6].toInt() and 0xFF) shl 8) or (resp[7].toInt() and 0xFF)
-            if (anCount == 0) return null
-            var pos = 12
-            // Skip question section
-            while (pos < resp.size && resp[pos] != 0.toByte()) {
-                val l = resp[pos++].toInt() and 0xFF
-                pos += l
-            }
-            pos += 5 // null label + QTYPE + QCLASS
-            // Find first A record
-            repeat(anCount) {
-                if (pos + 10 > resp.size) return@repeat
-                if (resp[pos].toInt() and 0xC0 == 0xC0) pos += 2
-                else { while (pos < resp.size && resp[pos] != 0.toByte()) pos++; pos++ }
-                if (pos + 10 > resp.size) return@repeat
-                val type = ((resp[pos].toInt() and 0xFF) shl 8) or (resp[pos+1].toInt() and 0xFF)
-                val rdLen = ((resp[pos+8].toInt() and 0xFF) shl 8) or (resp[pos+9].toInt() and 0xFF)
-                pos += 10
-                if (type == 1 && rdLen == 4 && pos + 4 <= resp.size) {
-                    return resp.copyOfRange(pos, pos + 4)
-                }
-                pos += rdLen
-            }
-            null
-        } catch (_: Exception) { null }
     }
 
     // ── GPS refresh loop ──────────────────────────────────────────────────────
@@ -680,8 +623,15 @@ class RnetForegroundService : VpnService() {
             val reader = Thread({
                 val buf = ByteArray(READ_BUF)
                 while (alive) {
-                    val n = try { inp.read(buf) } catch (_: Exception) { -1 }
-                    if (n <= 0) { if (alive) continue else break }
+                    val n = try {
+                        inp.read(buf)
+                    } catch (_: Exception) {
+                        // IOException means the fd was closed (by rebuildTun or stop).
+                        // Break immediately — continuing would spin on a dead fd and
+                        // block all traffic until the thread is interrupted externally.
+                        break
+                    }
+                    if (n <= 0) break   // EOF: tun closed, exit cleanly
                     val pkt = buf.copyOf(n)
                     try { handlePkt(pkt, n) } catch (_: Exception) {}
                 }
