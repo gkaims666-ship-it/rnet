@@ -351,15 +351,20 @@ class SmartRouter(
         val s = Socket(); vpnService.protect(s)
         s.setReceiveBufferSize(SOCK_BUF); s.setSendBufferSize(SOCK_BUF)
         s.tcpNoDelay = true
-        s.keepAlive = true   // New feature: TCP keepalive
+        s.keepAlive = true
         s.soTimeout = PROBE_TIMEOUT
         s.connect(InetSocketAddress(proxyHost, proxyPort), PROBE_TIMEOUT)
-        val sin = s.getInputStream(); val sout = s.getOutputStream()
+        val din  = java.io.DataInputStream(s.getInputStream())
+        val sout = s.getOutputStream()
+
+        // Greeting: no-auth
         sout.write(byteArrayOf(0x05, 0x01, 0x00)); sout.flush()
-        val gr = ByteArray(2); sin.readFully(gr)
+        val gr = ByteArray(2); din.readFully(gr)
         if (gr[0] != 0x05.toByte() || gr[1] != 0x00.toByte()) {
             runCatching { s.close() }; return null
         }
+
+        // CONNECT request — ATYP=0x01 (IPv4)
         val ip = dstIP.address
         val req = ByteArray(10).also { r ->
             r[0] = 0x05; r[1] = 0x01; r[2] = 0x00; r[3] = 0x01
@@ -367,10 +372,24 @@ class SmartRouter(
             r[8] = (dstPort shr 8).toByte(); r[9] = (dstPort and 0xFF).toByte()
         }
         sout.write(req); sout.flush()
-        val resp = ByteArray(10); sin.readFully(resp)
-        if (resp[0] != 0x05.toByte() || resp[1] != 0x00.toByte()) {
+
+        // CONNECT response: VER REP RSV ATYP [BND.ADDR] BND.PORT
+        // CRITICAL: ATYP determines address length — must drain exactly the right
+        // number of bytes or the stream is left in a corrupted state for all reads.
+        val hdr = ByteArray(4); din.readFully(hdr)
+        if (hdr[0] != 0x05.toByte() || hdr[1] != 0x00.toByte()) {
             runCatching { s.close() }; return null
         }
+        when (hdr[3].toInt() and 0xFF) {
+            0x01 -> din.readFully(ByteArray(4 + 2))          // IPv4 (4 bytes) + port (2 bytes)
+            0x04 -> din.readFully(ByteArray(16 + 2))         // IPv6 (16 bytes) + port (2 bytes)
+            0x03 -> {                                          // domain: 1-byte len + domain + port
+                val len = din.read() and 0xFF
+                din.readFully(ByteArray(len + 2))
+            }
+            else -> { runCatching { s.close() }; return null }
+        }
+
         s.soTimeout = 0
         return s
     }
