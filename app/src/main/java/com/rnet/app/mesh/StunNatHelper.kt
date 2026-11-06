@@ -1,5 +1,6 @@
 package com.rnet.app.mesh
 
+import android.net.VpnService
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -43,14 +44,23 @@ object StunNatHelper {
      * Performs a STUN Binding Request to discover the device's public IP:port.
      * Returns null if all STUN servers are unreachable (e.g. offline or restricted).
      *
+     * @param timeoutMs   Per-server socket timeout in milliseconds.
+     * @param vpnService  MUST be supplied when a VPN tun is active. Without protect()
+     *                    the STUN UDP socket is routed back through the tun interface
+     *                    and loops forever. VpnService.protect(DatagramSocket) exempts
+     *                    the socket from tun routing.
+     *
      * This is a best-effort call; the mesh layer continues with local discovery
      * if STUN is unavailable.
      */
-    suspend fun discoverReflexiveAddress(timeoutMs: Int = 2000): ReflexiveAddress? =
+    suspend fun discoverReflexiveAddress(
+        timeoutMs: Int = 2000,
+        vpnService: VpnService? = null
+    ): ReflexiveAddress? =
         withContext(Dispatchers.IO) {
             for ((host, port) in STUN_SERVERS) {
                 try {
-                    val result = sendBindingRequest(host, port, timeoutMs)
+                    val result = sendBindingRequest(host, port, timeoutMs, vpnService)
                     if (result != null) return@withContext result
                 } catch (e: Exception) {
                     Log.d(TAG, "STUN $host:$port unreachable: ${e.message}")
@@ -62,11 +72,22 @@ object StunNatHelper {
 
     // ----- RFC 5389 Binding Request -----
 
-    private fun sendBindingRequest(host: String, port: Int, timeoutMs: Int): ReflexiveAddress? {
+    private fun sendBindingRequest(
+        host: String,
+        port: Int,
+        timeoutMs: Int,
+        vpnService: VpnService?
+    ): ReflexiveAddress? {
         val txId = ByteArray(12).also { java.security.SecureRandom().nextBytes(it) }
         val request = buildBindingRequest(txId)
 
         DatagramSocket().use { sock ->
+            // CRITICAL: protect the UDP socket from the VPN tun routing loop.
+            // VpnService.protect(DatagramSocket) is available since API 21.
+            // Without this, when the VPN is active, the STUN UDP packet is
+            // routed back into the tun fd and never reaches the STUN server.
+            vpnService?.protect(sock)
+
             sock.soTimeout = timeoutMs
             val addr = InetAddress.getByName(host)
             sock.send(DatagramPacket(request, request.size, addr, port))
@@ -93,7 +114,9 @@ object StunNatHelper {
         val buf = ByteBuffer.wrap(data)
         val msgType   = buf.short
         val msgLen    = buf.short.toInt() and 0xFFFF
+        @Suppress("UNUSED_VARIABLE")
         val magic     = buf.int
+        @Suppress("UNUSED_VARIABLE")
         val txId      = ByteArray(12).also { buf.get(it) }
 
         if (msgType != 0x0101.toShort()) return null  // not a Binding Response
@@ -102,10 +125,10 @@ object StunNatHelper {
         while (remaining >= 4) {
             val attrType = buf.short.toInt() and 0xFFFF
             val attrLen  = buf.short.toInt() and 0xFFFF
-            remaining -= 4
+            remaining -= 4   // consumed type(2) + length(2)
 
             if (attrType == 0x0020 && attrLen >= 8) {   // XOR-MAPPED-ADDRESS
-                buf.get()                                // ignored
+                buf.get()                                // ignored (reserved)
                 val family = buf.get().toInt() and 0xFF
                 if (family == 0x01) {                   // IPv4
                     val xPort = (buf.short.toInt() and 0xFFFF) xor 0x2112
@@ -118,11 +141,21 @@ object StunNatHelper {
                     )
                     return ReflexiveAddress(ip, xPort)
                 }
-            } else {
+                // IPv6 or unrecognised family — skip the rest of this attribute
+                val consumed = 8  // family(1) + reserved(1) + port(2) + IPv4(4) already read for IPv4;
+                                  // for other families, skip the declared length minus the 2 we read
+                val skip = attrLen - 2  // already consumed: reserved(1) + family(1)
                 val padded = (attrLen + 3) and 3.inv()
-                buf.position(buf.position() + minOf(padded, remaining))
+                val toSkip = minOf(padded - 2, buf.remaining())
+                if (toSkip > 0) buf.position(buf.position() + toSkip)
+                remaining -= minOf(padded, remaining)
+            } else {
+                // Skip this attribute (padded to 4-byte boundary)
+                val padded = (attrLen + 3) and 3.inv()
+                val toSkip = minOf(padded, buf.remaining())
+                if (toSkip > 0) buf.position(buf.position() + toSkip)
+                remaining -= minOf(padded, remaining)
             }
-            remaining -= minOf((attrLen + 3) and 3.inv(), remaining)
         }
         return null
     }

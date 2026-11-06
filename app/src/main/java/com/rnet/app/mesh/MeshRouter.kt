@@ -3,6 +3,7 @@ package com.rnet.app.mesh
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.VpnService
 import com.rnet.app.transport.MultipathEngine
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -46,7 +47,8 @@ class MeshRouter(
     private val context: Context,
     private val wifiMesh: WifiDirectMesh,
     private val bleScanner: BleMeshScanner,
-    private val engine: MultipathEngine
+    private val engine: MultipathEngine,
+    private val vpnService: VpnService? = null
 ) {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -75,7 +77,7 @@ class MeshRouter(
         // peers on different NATs can establish direct connections. This is a
         // fire-and-forget call; the mesh continues normally if STUN fails.
         scope.launch {
-            val reflexive = StunNatHelper.discoverReflexiveAddress()
+            val reflexive = StunNatHelper.discoverReflexiveAddress(vpnService = vpnService)
             if (reflexive != null) {
                 android.util.Log.i("MeshRouter",
                     "STUN reflexive address: ${reflexive.ip}:${reflexive.port}")
@@ -179,7 +181,7 @@ class MeshRouter(
     private fun selectAndConnectGateway() {
         // Find consented Wi-Fi Direct peer with uplink and best signal
         val bestWifiPeer = wifiMesh.peers.value
-            .maxByOrNull { it.status }  // AVAILABLE = 3; prefer lower status = better
+            .minByOrNull { it.status }  // CONNECTED=0, INVITED=1, AVAILABLE=3 — lower is better
 
         bestWifiPeer?.let { device ->
             // Consent is enforced at UI layer (MeshConsentDialog) before this runs
