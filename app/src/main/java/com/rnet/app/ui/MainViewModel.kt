@@ -17,16 +17,21 @@ import kotlinx.coroutines.launch
 data class UiState(
     val engineActive: Boolean       = false,
     val gatewayActive: Boolean      = false,
-    val snr: Float                  = 0f,       // Signal-to-noise ratio proxy (RSRP + offset)
-    val packetDeliveryRate: Float   = 1f,       // 0.0–1.0
+    val snr: Float                  = 0f,
+    val packetDeliveryRate: Float   = 1f,
     val activeStations: Int         = 0,
     val totalBytesIn: Long          = 0L,
     val totalBytesOut: Long         = 0L,
     val technology: String          = "--",
     val bandMhz: Int                = 0,
     val gatewayConsentGranted: Boolean = false,
-    val useResilientCore: Boolean   = false,    // user opt-in: route via Psiphon
-    val errorMessage: String?       = null
+    val useResilientCore: Boolean   = false,
+    val errorMessage: String?       = null,
+    // New fields
+    val activeSessionCount: Int     = 0,        // live TCP sessions through the VPN
+    val proxyLabel: String          = "—",      // "Psiphon" / "Direct" / "Reconnecting…"
+    val connectionPhase: com.rnet.app.service.RnetForegroundService.Phase =
+        com.rnet.app.service.RnetForegroundService.Phase.IDLE
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -52,9 +57,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 delay(1_000)
                 val bytesIn  = RnetForegroundService.activeBytesIn.get()
                 val bytesOut = RnetForegroundService.activeBytesOut.get()
-                if (bytesIn != _ui.value.totalBytesIn || bytesOut != _ui.value.totalBytesOut) {
-                    _ui.update { it.copy(totalBytesIn = bytesIn, totalBytesOut = bytesOut) }
-                }
+                val sessions = RnetForegroundService.activeSessionCount.get()
+                val proxy    = RnetForegroundService.proxyLabel
+                val phase    = RnetForegroundService.connectionPhase
+                _ui.update { it.copy(
+                    totalBytesIn       = bytesIn,
+                    totalBytesOut      = bytesOut,
+                    activeSessionCount = sessions,
+                    proxyLabel         = proxy,
+                    connectionPhase    = phase
+                ) }
             }
         }
     }

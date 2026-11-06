@@ -16,12 +16,21 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SignalCellularAlt
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.WifiTethering
+import androidx.compose.ui.draw.alpha
+import com.rnet.app.service.RnetForegroundService
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -183,7 +192,12 @@ fun RnetDashboard(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // ---- Main engine toggle ----
-            EngineToggleCard(uiState.engineActive, onEngineToggle)
+            EngineToggleCard(uiState, onEngineToggle)
+
+            // ---- Live connection status (shown when active) ----
+            if (uiState.engineActive) {
+                ConnectionStatusCard(uiState)
+            }
 
             // ---- Resilient Core opt-in (Psiphon decentralized routing) ----
             ResilientCoreCard(uiState.useResilientCore, onResilientCoreToggle)
@@ -237,33 +251,35 @@ private fun CardHeader(
 }
 
 @Composable
-private fun EngineToggleCard(active: Boolean, onToggle: (Boolean) -> Unit) {
+private fun EngineToggleCard(state: UiState, onToggle: (Boolean) -> Unit) {
+    val active = state.engineActive
     val cardColor by animateColorAsState(
         targetValue = if (active) Color(0xFF1A0A2E) else MaterialTheme.colorScheme.surface,
-        animationSpec = tween(durationMillis = 400),
-        label = "engineCard"
+        animationSpec = tween(durationMillis = 400), label = "engineCard"
     )
     val borderColor by animateColorAsState(
         targetValue = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                       else Color.Transparent,
-        animationSpec = tween(durationMillis = 400),
-        label = "engineBorder"
+        animationSpec = tween(durationMillis = 400), label = "engineBorder"
     )
+    // Pulsing dot for FINDING_PROXY phase
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f, targetValue = 0.2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ), label = "pulseAlpha"
+    )
+    val isFinding = state.connectionPhase == RnetForegroundService.Phase.FINDING_PROXY ||
+                    state.connectionPhase == RnetForegroundService.Phase.STARTING
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(
-                width = 1.dp,
-                color = borderColor,
-                shape = MaterialTheme.shapes.medium
-            ),
+        modifier = Modifier.fillMaxWidth().border(1.dp, borderColor, MaterialTheme.shapes.medium),
         colors = CardDefaults.cardColors(containerColor = cardColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -279,17 +295,30 @@ private fun EngineToggleCard(active: Boolean, onToggle: (Boolean) -> Unit) {
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (active) {
+                        val dotColor = when (state.connectionPhase) {
+                            RnetForegroundService.Phase.ACTIVE        -> Color(0xFF4CAF50)
+                            RnetForegroundService.Phase.FINDING_PROXY -> Color(0xFFFFB74D)
+                            else                                       -> Color(0xFFB39DDB)
+                        }
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(MaterialTheme.shapes.extraSmall)
-                                .background(Color(0xFF4CAF50))
+                                .background(dotColor)
+                                .then(if (isFinding) Modifier.alpha(pulseAlpha) else Modifier)
                         )
                         Spacer(Modifier.width(6.dp))
                     }
+                    val statusText = when {
+                        !active -> stringResource(R.string.engine_status_inactive)
+                        state.connectionPhase == RnetForegroundService.Phase.FINDING_PROXY ->
+                            stringResource(R.string.vpn_status_starting_tunnel)
+                        state.connectionPhase == RnetForegroundService.Phase.ACTIVE ->
+                            stringResource(R.string.engine_status_active)
+                        else -> stringResource(R.string.vpn_status_connecting)
+                    }
                     Text(
-                        text = if (active) stringResource(R.string.engine_status_active)
-                               else stringResource(R.string.engine_status_inactive),
+                        text = statusText,
                         style = MaterialTheme.typography.bodySmall,
                         color = if (active) Color(0xFF81C784)
                                 else MaterialTheme.colorScheme.onSurfaceVariant
@@ -297,6 +326,61 @@ private fun EngineToggleCard(active: Boolean, onToggle: (Boolean) -> Unit) {
                 }
             }
             Switch(checked = active, onCheckedChange = onToggle)
+        }
+    }
+}
+
+@Composable
+private fun ConnectionStatusCard(state: UiState) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0718)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            CardHeader(
+                icon = Icons.Filled.Shield,
+                title = "Connection",
+                iconTint = Color(0xFF9C64D6),
+                iconBg = Color(0xFF1A0A2E)
+            )
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+            Spacer(Modifier.height(12.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Circumvention transport
+                MetricRow(
+                    label = "Circumvention",
+                    value = state.proxyLabel,
+                    valueColor = when (state.proxyLabel) {
+                        "Psiphon" -> Color(0xFF81C784)
+                        "Direct"  -> Color(0xFFFFB74D)
+                        else      -> Color(0xFFB39DDB)
+                    }
+                )
+                // Active TCP sessions
+                MetricRow(
+                    label = "Active Sessions",
+                    value = state.activeSessionCount.toString(),
+                    valueColor = if (state.activeSessionCount > 0) Color(0xFFCE93D8)
+                                 else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                // DNS protection
+                MetricRow(
+                    label = "DNS Protection",
+                    value = "DoH (Cloudflare)",
+                    valueColor = Color(0xFF81C784)
+                )
+                // Data
+                MetricRow(
+                    label = stringResource(R.string.metric_bytes_in),
+                    value = formatBytes(state.totalBytesIn)
+                )
+                MetricRow(
+                    label = stringResource(R.string.metric_bytes_out),
+                    value = formatBytes(state.totalBytesOut)
+                )
+            }
         }
     }
 }
@@ -375,14 +459,6 @@ private fun TelemetryCard(state: UiState) {
                 MetricRow(
                     label = stringResource(R.string.metric_stations),
                     value = state.activeStations.toString()
-                )
-                MetricRow(
-                    label = stringResource(R.string.metric_bytes_in),
-                    value = formatBytes(state.totalBytesIn)
-                )
-                MetricRow(
-                    label = stringResource(R.string.metric_bytes_out),
-                    value = formatBytes(state.totalBytesOut)
                 )
             }
         }
