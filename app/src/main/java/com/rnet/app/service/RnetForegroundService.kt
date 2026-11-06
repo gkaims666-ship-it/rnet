@@ -92,13 +92,26 @@ class RnetForegroundService : VpnService() {
         @Volatile var pendingRegion      = PREFERRED_REGION
         @Volatile var routeCacheSize     = 0   // how many destinations are cached
         @Volatile var pooledSockets      = 0   // pre-warmed sockets ready
-        // Apps excluded from VPN (split tunneling) — system apps that don't need circumvention
+        // Apps excluded from VPN (split tunneling).
+        // Google/YouTube traffic bypasses the VPN because:
+        //   1. YouTube CDN IPs (googlevideo.com) are blocked by Psiphon exit nodes — data-center
+        //      IPs get rate-limited or 403'd by Google's anti-proxy systems.
+        //   2. Russian ISPs do NOT block YouTube/Google directly (unlike some other services),
+        //      so a direct connection works fine and is faster.
+        //   3. GMS/Firebase are excluded to prevent VPN restart loops on network callbacks.
         val SPLIT_TUNNEL_PACKAGES = setOf(
-            "com.android.vending",         // Play Store — keep fast
-            "com.google.android.gms",      // Google Play Services
-            "com.google.android.gsf",      // Google Services Framework
+            "com.android.vending",              // Play Store
+            "com.google.android.gms",           // Google Play Services
+            "com.google.android.gsf",           // Google Services Framework
+            "com.google.android.youtube",       // YouTube — Psiphon exits are proxy-blocked by Google CDN
+            "com.google.android.apps.youtube.music", // YouTube Music
+            "com.google.android.googlequicksearchbox", // Google Search/Assistant
+            "com.google.android.gm",            // Gmail
+            "com.google.android.apps.maps",     // Google Maps
+            "com.google.android.talk",          // Google Meet
+            "com.google.android.apps.meetings", // Google Meet (new package)
             "com.android.providers.downloads",
-            "com.sec.android.daemonapp"    // Samsung system daemon
+            "com.sec.android.daemonapp"         // Samsung system daemon
         )
     }
 
@@ -263,6 +276,9 @@ class RnetForegroundService : VpnService() {
                 proxyLabel = "Smart·$newRegion"
                 val city = LocationMasker.start(applicationContext, newRegion)
                 if (city != null) Log.i(TAG, "GPS → $city")
+                // Verify actual exit IP and start GPS refresh for new region
+                launch { verifyExitIpAndUpdateRegion(port, newRegion) }
+                launch { gpsRefreshLoop(newRegion) }
             } else {
                 Log.w(TAG, "New region $newRegion tunnel failed — keeping existing")
                 proxyLabel = "Smart·$exitRegion"
@@ -337,8 +353,16 @@ class RnetForegroundService : VpnService() {
             proxyLabel = "Smart·$preferredRegion"
             connectionPhase = ConnectionPhase.ACTIVE
             Log.i(TAG, "Primary tunnel $preferredRegion:$port ready")
+
+            // Verify actual exit IP and update region label to match reality
+            launch { verifyExitIpAndUpdateRegion(port, preferredRegion) }
+
             val city = LocationMasker.start(applicationContext, preferredRegion)
             if (city != null) Log.i(TAG, "GPS → $city")
+
+            // Schedule periodic GPS mock refresh (some apps re-query location every ~30s)
+            launch { gpsRefreshLoop(preferredRegion) }
+
             postNotif()
 
             // Warm up 2 fallback tunnels in background for fast failover
@@ -357,6 +381,10 @@ class RnetForegroundService : VpnService() {
                     proxyLabel = "Smart·$fb"
                     connectionPhase = ConnectionPhase.ACTIVE
                     Log.i(TAG, "Fallback tunnel $fb:$p ready")
+                    launch { verifyExitIpAndUpdateRegion(p, fb) }
+                    val city = LocationMasker.start(applicationContext, fb)
+                    if (city != null) Log.i(TAG, "GPS → $city")
+                    launch { gpsRefreshLoop(fb) }
                     postNotif()
                     connected = true
                     break
@@ -367,6 +395,145 @@ class RnetForegroundService : VpnService() {
                 connectionPhase = ConnectionPhase.ACTIVE
                 postNotif()
             }
+        }
+    }
+
+    // ── Exit IP verification ──────────────────────────────────────────────────
+    /**
+     * After a tunnel is established, connect to a lightweight IP-echo endpoint
+     * *through the SOCKS5 proxy* and check the actual exit IP's geolocation.
+     * Updates exitRegion and proxyLabel if the actual exit country differs from
+     * what we requested (Psiphon sometimes routes through intermediate relays
+     * that have different geolocations).
+     *
+     * We use ipinfo.io/json — tiny JSON response (~200 bytes), reliable, free.
+     * Connecting through the SOCKS5 proxy ensures we see the exit IP, not our real IP.
+     */
+    private suspend fun verifyExitIpAndUpdateRegion(socksPort: Int, requestedRegion: String) =
+        withContext(Dispatchers.IO) {
+        if (!engineStarted) return@withContext
+        try {
+            // Connect to ipinfo.io through the Psiphon SOCKS5 tunnel
+            val ipinfoHost = "ipinfo.io"
+            val ipinfoPort = 443
+
+            // Resolve ipinfo.io via DoH first
+            val ipBytes = resolveHostViaDoh(ipinfoHost) ?: return@withContext
+            val ipinfoAddr = InetAddress.getByAddress(ipBytes)
+
+            // Connect via SOCKS5 proxy and do a minimal HTTPS GET
+            val s = Socket()
+            protect(s)
+            s.soTimeout = 8000
+            s.connect(InetSocketAddress("127.0.0.1", socksPort), 5000)
+            val sin = s.getInputStream(); val sout = s.getOutputStream()
+            // SOCKS5 greeting
+            sout.write(byteArrayOf(0x05, 0x01, 0x00)); sout.flush()
+            val gr = ByteArray(2); sin.read(gr)
+            if (gr[0] != 0x05.toByte() || gr[1] != 0x00.toByte()) { s.close(); return@withContext }
+            // CONNECT request by IP
+            val ip = ipinfoAddr.address
+            val req = ByteArray(10).also { r ->
+                r[0] = 0x05; r[1] = 0x01; r[2] = 0x00; r[3] = 0x01
+                ip.copyInto(r, 4)
+                r[8] = (ipinfoPort shr 8).toByte(); r[9] = (ipinfoPort and 0xFF).toByte()
+            }
+            sout.write(req); sout.flush()
+            val resp = ByteArray(10); sin.read(resp)
+            if (resp[0] != 0x05.toByte() || resp[1] != 0x00.toByte()) { s.close(); return@withContext }
+            s.soTimeout = 0
+
+            // Wrap in TLS and send HTTP GET
+            val tlsFactory = javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory
+            val tls = tlsFactory.createSocket(s, ipinfoHost, ipinfoPort, true) as javax.net.ssl.SSLSocket
+            tls.soTimeout = 8000
+            tls.startHandshake()
+            val tout = tls.getOutputStream()
+            tout.write("GET /country HTTP/1.1\r\nHost: ipinfo.io\r\nConnection: close\r\n\r\n".toByteArray())
+            tout.flush()
+            val body = tls.inputStream.bufferedReader().readText()
+            tls.close()
+
+            // Response is just the 2-letter country code e.g. "IS\n" after HTTP headers
+            val country = body.substringAfterLast("\r\n\r\n").trim().take(2).uppercase()
+            if (country.length == 2 && country.all { it.isLetter() }) {
+                Log.i(TAG, "Actual exit country: $country (requested: $requestedRegion)")
+                if (country != requestedRegion) {
+                    Log.w(TAG, "Exit country mismatch — Psiphon routing via $country instead of $requestedRegion")
+                }
+                exitRegion = country
+                proxyLabel = "Smart·$country"
+                // Update GPS mock to match actual exit country
+                LocationMasker.start(applicationContext, country)
+                postNotif()
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Exit IP check failed (non-critical): ${e.message}")
+            // Not fatal — UI still shows requested region
+        }
+    }
+
+    /** Resolve a hostname to its IPv4 address bytes using DoH, synchronously. */
+    private fun resolveHostViaDoh(host: String): ByteArray? {
+        return try {
+            // Build a minimal DNS A query for the host
+            val labels = host.split('.')
+            val qname = labels.flatMap { label ->
+                val b = label.toByteArray(Charsets.US_ASCII)
+                listOf(b.size.toByte()) + b.toList()
+            } + listOf(0.toByte())
+            val query = ByteArray(12 + qname.size + 4)
+            // ID = 0x0001, QR=0 (query), RD=1
+            query[0] = 0x00; query[1] = 0x01
+            query[2] = 0x01; query[3] = 0x00  // flags: RD=1
+            query[4] = 0x00; query[5] = 0x01  // QDCOUNT = 1
+            qname.forEachIndexed { i, b -> query[12 + i] = b }
+            val off = 12 + qname.size
+            query[off] = 0x00; query[off+1] = 0x01  // QTYPE A
+            query[off+2] = 0x00; query[off+3] = 0x01 // QCLASS IN
+
+            val resp = DoHResolver.resolveParallel(query) ?: return null
+            // Parse first A record from answer
+            if (resp.size < 12) return null
+            val anCount = ((resp[6].toInt() and 0xFF) shl 8) or (resp[7].toInt() and 0xFF)
+            if (anCount == 0) return null
+            var pos = 12
+            // Skip question section
+            while (pos < resp.size && resp[pos] != 0.toByte()) {
+                val l = resp[pos++].toInt() and 0xFF
+                pos += l
+            }
+            pos += 5 // null label + QTYPE + QCLASS
+            // Find first A record
+            repeat(anCount) {
+                if (pos + 10 > resp.size) return@repeat
+                if (resp[pos].toInt() and 0xC0 == 0xC0) pos += 2
+                else { while (pos < resp.size && resp[pos] != 0.toByte()) pos++; pos++ }
+                if (pos + 10 > resp.size) return@repeat
+                val type = ((resp[pos].toInt() and 0xFF) shl 8) or (resp[pos+1].toInt() and 0xFF)
+                val rdLen = ((resp[pos+8].toInt() and 0xFF) shl 8) or (resp[pos+9].toInt() and 0xFF)
+                pos += 10
+                if (type == 1 && rdLen == 4 && pos + 4 <= resp.size) {
+                    return resp.copyOfRange(pos, pos + 4)
+                }
+                pos += rdLen
+            }
+            null
+        } catch (_: Exception) { null }
+    }
+
+    // ── GPS refresh loop ──────────────────────────────────────────────────────
+    /**
+     * Push fresh GPS mock coordinates every 15 seconds.
+     * Many apps (browsers, location services) re-query GPS regularly.
+     * Without refreshing, the mock provider can go stale and apps fall back
+     * to network/cell-tower location (which reveals the real location).
+     */
+    private suspend fun gpsRefreshLoop(region: String) = withContext(Dispatchers.IO) {
+        while (engineStarted) {
+            delay(15_000L)
+            if (!engineStarted) break
+            LocationMasker.push(applicationContext, exitRegion.ifEmpty { region })
         }
     }
 
