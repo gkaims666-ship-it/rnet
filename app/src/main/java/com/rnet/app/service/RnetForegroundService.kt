@@ -279,7 +279,7 @@ class RnetForegroundService : VpnService() {
             readerThread = reader
 
             // Keep coroutine alive until stopped
-            reader.join()
+            withContext(Dispatchers.IO) { reader.join() }
         } catch (_: CancellationException) {
         } catch (e: Exception) {
             Log.e(TAG, "VPN loop crashed: ${e.message}", e)
