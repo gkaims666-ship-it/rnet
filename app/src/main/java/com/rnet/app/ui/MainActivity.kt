@@ -24,6 +24,10 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SignalCellularAlt
@@ -109,6 +113,7 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onResilientCoreToggle = { viewModel.setUseResilientCore(it) },
+                    onRegionChange = { viewModel.setExitRegion(it) },
                     onGatewayToggle = { wantOn ->
                         if (wantOn) {
                             if (uiState.gatewayConsentGranted) {
@@ -154,6 +159,7 @@ fun RnetDashboard(
     onEngineToggle: (Boolean) -> Unit,
     onGatewayToggle: (Boolean) -> Unit,
     onResilientCoreToggle: (Boolean) -> Unit = {},
+    onRegionChange: (String) -> Unit = {},
     onFaqClick: () -> Unit = {}
 ) {
     Scaffold(
@@ -199,6 +205,9 @@ fun RnetDashboard(
             if (uiState.engineActive) {
                 ConnectionStatusCard(uiState)
             }
+
+            // ---- Exit region picker ----
+            RegionPickerCard(uiState.exitRegion, onRegionChange)
 
             // ---- Resilient Core opt-in (Psiphon decentralized routing) ----
             ResilientCoreCard(uiState.useResilientCore, onResilientCoreToggle)
@@ -391,6 +400,115 @@ private fun ConnectionStatusCard(state: UiState) {
                     value = formatBytes(state.totalBytesOut)
                 )
             }
+        }
+    }
+}
+
+// ── Region metadata ──────────────────────────────────────────────────────────
+private data class RegionInfo(val code: String, val city: String, val note: String)
+private val ALL_REGIONS = listOf(
+    RegionInfo("IS", "Reykjavik",  "No censorship — #1 internet freedom"),
+    RegionInfo("EE", "Tallinn",    "Digital-first, no filtering"),
+    RegionInfo("NO", "Oslo",       "No content blocking"),
+    RegionInfo("SE", "Stockholm",  "No content blocking"),
+    RegionInfo("FI", "Helsinki",   "No content blocking"),
+    RegionInfo("CH", "Zurich",     "Strong legal protections, neutral"),
+    RegionInfo("DE", "Berlin",     "No state filtering"),
+    RegionInfo("NL", "Amsterdam",  "No state filtering"),
+    RegionInfo("AT", "Vienna",     "No state filtering"),
+    RegionInfo("CZ", "Prague",     "No state filtering"),
+    RegionInfo("CA", "Toronto",    "No blocking"),
+    RegionInfo("US", "New York",   "No ISP-level filtering"),
+    RegionInfo("GB", "London",     "Minor court-ordered blocks only"),
+    RegionInfo("JP", "Tokyo",      "Open internet"),
+    RegionInfo("AU", "Sydney",     "Mostly open")
+)
+
+@Composable
+private fun RegionPickerCard(selectedRegion: String, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val current = ALL_REGIONS.find { it.code == selectedRegion } ?: ALL_REGIONS[0]
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0718)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            CardHeader(
+                icon = Icons.Filled.Language,
+                title = "Exit Country",
+                iconTint = Color(0xFF80DEEA),
+                iconBg = Color(0xFF0A1A1E)
+            )
+            Spacer(Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+            Spacer(Modifier.height(12.dp))
+
+            // Currently selected country button
+            OutlinedButton(
+                onClick = { expanded = true },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = Color(0xFF80DEEA)
+                ),
+                border = BorderStroke(1.dp, Color(0xFF80DEEA).copy(alpha = 0.5f))
+            ) {
+                Text(
+                    text = "${regionFlag(current.code)}  ${current.code}  —  ${current.city}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(Modifier.weight(1f))
+                Icon(Icons.Filled.ExpandMore, contentDescription = null,
+                    tint = Color(0xFF80DEEA))
+            }
+
+            // Dropdown
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier
+                    .fillMaxWidth(0.92f)
+                    .background(Color(0xFF130924))
+            ) {
+                ALL_REGIONS.forEach { region ->
+                    val isSelected = region.code == selectedRegion
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(
+                                    text = "${regionFlag(region.code)}  ${region.code}  —  ${region.city}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (isSelected) Color(0xFF80DEEA)
+                                            else MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                                Text(
+                                    text = region.note,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+                        },
+                        onClick = {
+                            onSelect(region.code)
+                            expanded = false
+                        },
+                        leadingIcon = if (isSelected) ({
+                            Icon(Icons.Filled.Check, contentDescription = null,
+                                tint = Color(0xFF80DEEA), modifier = Modifier.size(16.dp))
+                        }) else null
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Change takes effect on next VPN restart",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
         }
     }
 }

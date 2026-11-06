@@ -30,24 +30,28 @@ object LocationMasker {
     private const val PROVIDER = LocationManager.GPS_PROVIDER
 
     // Region code → (latitude, longitude, city name)
+    // Covers all countries in RnetForegroundService.FREE_REGIONS + extras
     private val REGION_COORDS = mapOf(
-        "NL" to Triple(52.3676,  4.9041,  "Amsterdam"),
-        "DE" to Triple(52.5200, 13.4050,  "Berlin"),
-        "US" to Triple(40.7128, -74.0060, "New York"),
-        "GB" to Triple(51.5074, -0.1278,  "London"),
-        "FR" to Triple(48.8566,  2.3522,  "Paris"),
-        "CA" to Triple(43.6532, -79.3832, "Toronto"),
-        "JP" to Triple(35.6762, 139.6503, "Tokyo"),
-        "AU" to Triple(33.8688, 151.2093, "Sydney"),
-        "SE" to Triple(59.3293, 18.0686,  "Stockholm"),
-        "CH" to Triple(47.3769,  8.5417,  "Zurich"),
-        "AT" to Triple(48.2082, 16.3738,  "Vienna"),
-        "CZ" to Triple(50.0755, 14.4378,  "Prague"),
-        "RO" to Triple(44.4268, 26.1025,  "Bucharest"),
-        "SG" to Triple(1.3521,  103.8198, "Singapore"),
-        "IN" to Triple(28.6139,  77.2090, "New Delhi"),
-        "BR" to Triple(-23.5505, -46.6333, "São Paulo"),
-        ""   to Triple(52.3676,  4.9041,  "Amsterdam")  // default = NL
+        "IS" to Triple(64.1355, -21.8954, "Reykjavik"),    // Iceland — #1 internet freedom
+        "EE" to Triple(59.4370,  24.7536, "Tallinn"),      // Estonia
+        "NO" to Triple(59.9139,  10.7522, "Oslo"),         // Norway
+        "SE" to Triple(59.3293,  18.0686, "Stockholm"),    // Sweden
+        "FI" to Triple(60.1699,  24.9384, "Helsinki"),     // Finland
+        "CH" to Triple(47.3769,   8.5417, "Zurich"),       // Switzerland
+        "DE" to Triple(52.5200,  13.4050, "Berlin"),       // Germany
+        "NL" to Triple(52.3676,   4.9041, "Amsterdam"),    // Netherlands
+        "AT" to Triple(48.2082,  16.3738, "Vienna"),       // Austria
+        "CZ" to Triple(50.0755,  14.4378, "Prague"),       // Czech Republic
+        "CA" to Triple(43.6532, -79.3832, "Toronto"),      // Canada
+        "US" to Triple(40.7128, -74.0060, "New York"),     // United States
+        "GB" to Triple(51.5074,  -0.1278, "London"),       // United Kingdom
+        "JP" to Triple(35.6762, 139.6503, "Tokyo"),        // Japan
+        "AU" to Triple(-33.8688, 151.2093,"Sydney"),       // Australia
+        // extras kept for completeness
+        "FR" to Triple(48.8566,   2.3522, "Paris"),
+        "RO" to Triple(44.4268,  26.1025, "Bucharest"),
+        "SG" to Triple( 1.3521, 103.8198, "Singapore"),
+        ""   to Triple(64.1355, -21.8954, "Reykjavik")     // default = Iceland
     )
 
     @Volatile private var active = false

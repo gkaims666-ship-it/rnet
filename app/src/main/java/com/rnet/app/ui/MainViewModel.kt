@@ -41,7 +41,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _ui = MutableStateFlow(UiState(
         gatewayConsentGranted = prefs.getBoolean("gateway_consent_v1", false),
-        useResilientCore = ServerPrefs.useResilientCore(app.applicationContext)
+        useResilientCore = ServerPrefs.useResilientCore(app.applicationContext),
+        exitRegion = prefs.getString("exit_region", "IS") ?: "IS"
     ))
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
@@ -151,5 +152,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Force-set engine active flag without sending a service command (used for UI rollback). */
     fun setEngineActive(active: Boolean) {
         _ui.update { it.copy(engineActive = active) }
+    }
+
+    /**
+     * Set the preferred Psiphon exit region (e.g. "IS", "DE", "US").
+     * Persisted to SharedPreferences. Takes effect on next VPN restart.
+     */
+    fun setExitRegion(region: String) {
+        prefs.edit().putString("exit_region", region).apply()
+        // Update companion object so next start() picks up the new value
+        RnetForegroundService.pendingRegion = region
+        _ui.update { it.copy(exitRegion = region) }
     }
 }

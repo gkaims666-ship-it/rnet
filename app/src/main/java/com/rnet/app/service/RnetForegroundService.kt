@@ -67,8 +67,29 @@ class RnetForegroundService : VpnService() {
         private const val SESSION_QUEUE_CAPACITY = 128  // per-session write queue
 
         // Psiphon exit region for location masking.
-        // "NL" = Netherlands, "DE" = Germany, "US" = United States, "" = fastest available
-        private const val PREFERRED_REGION = "NL"
+        // Iceland is default — consistently #1 for internet freedom (no blocking at all).
+        // Full list of free-internet countries in order of preference.
+        private const val PREFERRED_REGION = "IS"   // Iceland
+
+        // All free-internet exit regions available to the user (shown in UI picker).
+        // Ordered: Iceland first, then Nordics, then Western Europe, then others.
+        val FREE_REGIONS = listOf(
+            "IS",   // 🇮🇸 Iceland       — #1 internet freedom, zero censorship
+            "EE",   // 🇪🇪 Estonia        — digital-first, no filtering
+            "NO",   // 🇳🇴 Norway         — no content blocking
+            "SE",   // 🇸🇪 Sweden         — no content blocking
+            "FI",   // 🇫🇮 Finland        — no content blocking
+            "CH",   // 🇨🇭 Switzerland    — strong legal protections, neutral
+            "DE",   // 🇩🇪 Germany        — no state filtering
+            "NL",   // 🇳🇱 Netherlands    — no state filtering
+            "AT",   // 🇦🇹 Austria        — no state filtering
+            "CZ",   // 🇨🇿 Czech Republic — no state filtering
+            "CA",   // 🇨🇦 Canada         — no blocking
+            "US",   // 🇺🇸 United States  — no ISP-level filtering
+            "GB",   // 🇬🇧 United Kingdom — minor court-ordered blocks only
+            "JP",   // 🇯🇵 Japan          — open internet
+            "AU"    // 🇦🇺 Australia      — mostly open
+        )
 
         // TCP flags
         private const val SYN = 0x02; private const val ACK = 0x10
@@ -83,6 +104,7 @@ class RnetForegroundService : VpnService() {
         @Volatile var connectionPhase    = ConnectionPhase.IDLE
         @Volatile var activeSocksPort    = 0
         @Volatile var exitRegion         = PREFERRED_REGION  // shown in UI
+        @Volatile var pendingRegion      = PREFERRED_REGION  // set by ViewModel before restart
     }
 
     // ── Thread pool ─────────────────────────────────────────────────────────
@@ -144,13 +166,18 @@ class RnetForegroundService : VpnService() {
     private fun start() {
         if (engineStarted) return
         engineStarted = true
+        // Load persisted region preference if not already set by ViewModel
+        val savedRegion = getSharedPreferences("rnet_prefs", MODE_PRIVATE)
+            .getString("exit_region", PREFERRED_REGION) ?: PREFERRED_REGION
+        if (pendingRegion == PREFERRED_REGION) pendingRegion = savedRegion
         connectionPhase = ConnectionPhase.STARTING
         activeBytesIn.set(0); activeBytesOut.set(0)
         activeSessionCount.set(0)
         activeProxy.set(null)
         proxyLabel = "Starting…"
         cellMon!!.start()
-        psiphon = PsiphonTransport(applicationContext, PREFERRED_REGION)
+        val region = pendingRegion.ifEmpty { PREFERRED_REGION }
+        psiphon = PsiphonTransport(applicationContext, region)
         svcScope.launch { startPsiphon() }
         svcScope.launch { vpnLoop() }
         svcScope.launch { proxyHealthLoop() }
@@ -178,17 +205,19 @@ class RnetForegroundService : VpnService() {
     private suspend fun startPsiphon() = withContext(Dispatchers.IO) {
         connectionPhase = ConnectionPhase.FINDING_PROXY
         try {
-            Log.i(TAG, "Starting Psiphon (region=$PREFERRED_REGION)…")
+            val region = pendingRegion.ifEmpty { PREFERRED_REGION }
+            Log.i(TAG, "Starting Psiphon (region=$region)…")
             val addr = psiphon!!.start()   // blocks up to 60s
             val port = addr.substringAfterLast(":").toIntOrNull() ?: return@withContext
             activeSocksPort = port
-            activeProxy.set(ProxyEntry("127.0.0.1", port, "Psiphon·$PREFERRED_REGION"))
-            proxyLabel = if (PREFERRED_REGION.isEmpty()) "Psiphon" else "Psiphon·$PREFERRED_REGION"
-            exitRegion = PREFERRED_REGION
+            val label = if (region.isEmpty()) "Psiphon" else "Psiphon·$region"
+            activeProxy.set(ProxyEntry("127.0.0.1", port, label))
+            proxyLabel = label
+            exitRegion = region
             connectionPhase = ConnectionPhase.ACTIVE
-            Log.i(TAG, "Psiphon ready → SOCKS5 127.0.0.1:$port")
-            // Start GPS location masking — shows location of exit country
-            val city = LocationMasker.start(applicationContext, PREFERRED_REGION)
+            Log.i(TAG, "Psiphon ready → SOCKS5 127.0.0.1:$port (exit $region)")
+            // Start GPS location masking — shows coordinates of exit country's capital
+            val city = LocationMasker.start(applicationContext, region)
             if (city != null) Log.i(TAG, "GPS mocked → $city")
             postNotif()
         } catch (e: Exception) {
