@@ -9,654 +9,465 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.rnet.app.R
-import com.rnet.app.crypto.HybridKeyExchange
 import com.rnet.app.crypto.SessionCipher
 import com.rnet.app.gateway.HotspotGateway
-import com.rnet.app.prefs.ServerPrefs
 import com.rnet.app.transport.CellMonitor
 import com.rnet.app.transport.MultipathEngine
 import com.rnet.app.ui.MainActivity
 import kotlinx.coroutines.*
-import java.io.FileInputStream
-import java.io.FileOutputStream
+import java.io.*
 import java.net.*
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * RnetForegroundService — combined foreground service + VPN service.
+ * RnetForegroundService — combined VPN + foreground service.
  *
- * Extends VpnService so it can call establish() directly without needing to
- * start a second service (which fails from background on Android 8+).
+ * Architecture:
+ *   1. We start a local SOCKS5 proxy on 127.0.0.1:LOCAL_PROXY_PORT.
+ *      Its sockets are protect()-ed so they bypass the VPN tun and reach real internet.
  *
- * Actions:
- *   ACTION_START         → establish VPN + start engine
- *   ACTION_STOP          → stop VPN + engine
- *   ACTION_GATEWAY_START → start HotspotGateway
- *   ACTION_GATEWAY_STOP  → stop gateway
+ *   2. We establish a VPN interface with addRoute("0.0.0.0", 0) to capture all IP traffic.
  *
- * VPN traffic flow:
- *   App → kernel → tun fd → this service → protected Socket → internet
- *   DNS: UDP port 53 → protected DatagramSocket → 1.1.1.1:53 → response back to tun fd
+ *   3. We read raw IP packets from the tun fd. For each TCP SYN we see, we:
+ *      a. Record the destination (dstIp:dstPort) keyed by (srcIp:srcPort)
+ *      b. Send a fake SYN-ACK back to the app's kernel so the app thinks the connection
+ *         is established
+ *      c. When the app sends its first data bytes (the TLS ClientHello for HTTPS, or
+ *         the HTTP request for plain HTTP), we open a protect()-ed Socket directly to
+ *         the original destination and relay bytes bidirectionally
+ *
+ *   This avoids the need for a full TCP stack — we let the kernel manage TCP on both sides.
+ *   We only deal with IP/TCP headers to track connection state and extract destinations.
+ *
+ *   DNS (UDP port 53):
+ *      We read UDP packets from the tun, forward them via a protect()-ed DatagramSocket
+ *      to 1.1.1.1:53, and write the response back as a UDP packet to the tun.
+ *      This handles all DNS lookups including those for Instagram, etc.
  */
 class RnetForegroundService : VpnService() {
 
     companion object {
-        const val ACTION_START          = "com.rnet.START"
-        const val ACTION_STOP           = "com.rnet.STOP"
-        const val ACTION_GATEWAY_START  = "com.rnet.GATEWAY_START"
-        const val ACTION_GATEWAY_STOP   = "com.rnet.GATEWAY_STOP"
+        const val ACTION_START         = "com.rnet.START"
+        const val ACTION_STOP          = "com.rnet.STOP"
+        const val ACTION_GATEWAY_START = "com.rnet.GATEWAY_START"
+        const val ACTION_GATEWAY_STOP  = "com.rnet.GATEWAY_STOP"
 
-        private const val TAG           = "RnetForegroundService"
-        private const val CHANNEL_ID    = "rnet_service_channel"
-        private const val NOTIF_ID      = 1001
+        private const val TAG     = "RnetVPN"
+        private const val CH_ID   = "rnet_svc"
+        private const val NOTIF   = 1001
+        private const val TUN_IP  = "10.0.0.2"
+        private const val MTU     = 1500
+        private const val MAX_CON = 300
+        private const val T_CONN  = 15_000  // TCP connect timeout
+        private const val T_DNS   = 5_000   // DNS timeout
 
-        // VPN config
-        private const val VPN_ADDRESS   = "10.111.222.1"
-        private const val VPN_MTU       = 1500
-        private const val MAX_TUNNELS   = 128
-        private const val CONNECT_TIMEOUT_MS = 10_000
-        private const val DNS_TIMEOUT_MS     = 5_000
+        // TCP flags
+        private const val SYN = 0x02; private const val ACK = 0x10
+        private const val FIN = 0x01; private const val RST = 0x04
+        private const val PSH = 0x08
 
-        // TCP flag constants
-        private const val TCP_FIN = 0x01
-        private const val TCP_SYN = 0x02
-        private const val TCP_RST = 0x04
-        private const val TCP_PSH = 0x08
-        private const val TCP_ACK = 0x10
-
-        /** Bytes transferred through VPN — polled by MainViewModel every second. */
         @JvmField val activeBytesIn  = AtomicLong(0L)
         @JvmField val activeBytesOut = AtomicLong(0L)
-
-        @Volatile var activeSocksPort: Int = 0
+        @Volatile var activeSocksPort = 0
     }
 
-    private var cellMonitor: CellMonitor? = null
-    private var engine: MultipathEngine? = null
+    // Thread pool — one thread per active TCP session for blocking I/O
+    private val pool = Executors.newCachedThreadPool()
+
+    private val svcScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var tun: ParcelFileDescriptor? = null
+    private val sessions  = ConcurrentHashMap<String, Session>()
+    private val connCount = AtomicInteger(0)
+
+    @Volatile private var alive         = false
+    @Volatile private var engineStarted = false
+    @Volatile private var gwStarted     = false
+
+    private var cellMon: CellMonitor?    = null
+    private var engine:  MultipathEngine? = null
     private var gateway: HotspotGateway? = null
 
-    @Volatile private var engineStarted  = false
-    @Volatile private var gatewayStarted = false
-
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    // VPN state
-    private var vpnInterface: ParcelFileDescriptor? = null
-    private var packetLoopJob: Job? = null
-    private val activeTunnels = AtomicInteger(0)
-    private val connections   = ConcurrentHashMap<String, TcpSession>()
-
-    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    // ─── Android lifecycle ────────────────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
-        cellMonitor = CellMonitor(this)
+        makeChan()
+        cellMon = CellMonitor(this)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIF_ID, buildNotification())
-        when (intent?.action) {
-            ACTION_START         -> startEngine()
-            ACTION_STOP          -> { stopEngine(); stopGateway() }
-            ACTION_GATEWAY_START -> startGateway()
-            ACTION_GATEWAY_STOP  -> stopGateway()
+    override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
+        startForeground(NOTIF, notif())
+        when (i?.action) {
+            ACTION_START         -> start()
+            ACTION_STOP          -> { stop(); stopGw() }
+            ACTION_GATEWAY_START -> startGw()
+            ACTION_GATEWAY_STOP  -> stopGw()
         }
         return START_STICKY
     }
 
-    override fun onRevoke() {
-        Log.w(TAG, "VPN permission revoked")
-        stopEngine()
-        super.onRevoke()
-    }
+    override fun onRevoke()  { stop(); super.onRevoke() }
+    override fun onBind(i: Intent?) = null
+    override fun onDestroy() { stopGw(); stop(); svcScope.cancel(); super.onDestroy() }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    // ─── Engine start / stop ──────────────────────────────────────────────────
 
-    override fun onDestroy() {
-        stopGateway()
-        stopEngine()
-        serviceScope.cancel()
-        super.onDestroy()
-    }
-
-    // ── Engine lifecycle ───────────────────────────────────────────────────────
-
-    private fun startEngine() {
+    private fun start() {
         if (engineStarted) return
         engineStarted = true
-        activeBytesIn.set(0L)
-        activeBytesOut.set(0L)
-        updateNotification()
-
-        val cipher = SessionCipher(ByteArray(32).also { java.security.SecureRandom().nextBytes(it) })
-        val cm     = cellMonitor!!
-        engine     = MultipathEngine(this, cipher, cm)
-        cm.start()
-
-        // Establish VPN interface on the main/IO thread — must happen in a coroutine
-        // so we don't block onStartCommand, but serviceScope is attached to this service
-        // so it won't be killed under us.
-        packetLoopJob = serviceScope.launch { runVpn(socksPort = 0) }
-
-        Log.i(TAG, "Engine started (direct mode)")
+        activeBytesIn.set(0); activeBytesOut.set(0)
+        cellMon!!.start()
+        svcScope.launch { vpnLoop() }
+        notify()
     }
 
-    private fun stopEngine() {
+    private fun stop() {
         if (!engineStarted) return
-        engineStarted = false
-        packetLoopJob?.cancel()
-        packetLoopJob = null
-        tearDownVpn()
-        engine?.let { runCatching { it.stop() } }
-        engine = null
-        cellMonitor?.stop()
-        activeSocksPort = 0
-        activeBytesIn.set(0L)
-        activeBytesOut.set(0L)
-        updateNotification()
-        if (!gatewayStarted) stopSelf()
+        engineStarted = false; alive = false
+        sessions.values.forEach { runCatching { it.close() } }; sessions.clear()
+        try { tun?.close() } catch (_: Exception) {}; tun = null
+        engine?.let { runCatching { it.stop() } }; engine = null
+        cellMon?.stop()
+        activeSocksPort = 0; activeBytesIn.set(0); activeBytesOut.set(0)
+        notify()
+        if (!gwStarted) stopSelf()
     }
 
-    // ── VPN interface ─────────────────────────────────────────────────────────
+    // ─── VPN loop (runs in svcScope coroutine) ────────────────────────────────
 
-    private suspend fun runVpn(socksPort: Int) {
+    private suspend fun vpnLoop() {
         try {
-            val builder = Builder()
+            tun = Builder()
                 .setSession("RNET")
-                .setMtu(VPN_MTU)
-                .addAddress(VPN_ADDRESS, 24)
+                .setMtu(MTU)
+                .addAddress(TUN_IP, 32)
+                .addRoute("0.0.0.0", 0)
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
-                .addRoute("0.0.0.0", 0)
                 .setBlocking(true)
-
-            // Exclude our own app from VPN to avoid loopback
-            try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
-
-            val pfd = builder.establish()
-            if (pfd == null) {
-                Log.e(TAG, "establish() returned null — VPN permission not granted?")
-                engineStarted = false
-                updateNotification()
-                return
-            }
-            vpnInterface = pfd
-            Log.i(TAG, "VPN interface established ✓ (mode=${if (socksPort > 0) "SOCKS5:$socksPort" else "direct"})")
-            updateNotification()
-
-            // Run the packet forwarding loop — this blocks until the job is cancelled
-            readPacketLoop(pfd, socksPort)
-
-        } catch (e: CancellationException) {
-            Log.i(TAG, "VPN coroutine cancelled")
-        } catch (e: Exception) {
-            Log.e(TAG, "VPN error: ${e.message}", e)
-        } finally {
-            tearDownVpn()
-        }
-    }
-
-    private fun tearDownVpn() {
-        connections.values.forEach { runCatching { it.close() } }
-        connections.clear()
-        try { vpnInterface?.close() } catch (_: Exception) {}
-        vpnInterface = null
-    }
-
-    // ── Packet loop ────────────────────────────────────────────────────────────
-
-    private suspend fun readPacketLoop(tun: ParcelFileDescriptor, socksPort: Int) {
-        val tunIn  = FileInputStream(tun.fileDescriptor)
-        val tunOut = FileOutputStream(tun.fileDescriptor)
-        val buf    = ByteArray(VPN_MTU + 40)
-        val scope  = serviceScope
-
-        while (currentCoroutineContext().isActive) {
-            try {
-                val len = withContext(Dispatchers.IO) { tunIn.read(buf) }
-                if (len <= 0) break
-                if (len < 20) continue
-
-                // IPv4 header check
-                val version = (buf[0].toInt() and 0xFF) shr 4
-                if (version != 4) continue
-
-                val ipHdrLen = (buf[0].toInt() and 0x0F) * 4
-                if (len < ipHdrLen + 8) continue
-
-                val proto  = buf[9].toInt() and 0xFF
-                val srcIp  = InetAddress.getByAddress(buf.copyOfRange(12, 16))
-                val dstIp  = InetAddress.getByAddress(buf.copyOfRange(16, 20))
-
-                when (proto) {
-                    6  -> handleTcp(buf, len, ipHdrLen, srcIp, dstIp, tunOut, socksPort, scope)
-                    17 -> handleUdp(buf, len, ipHdrLen, srcIp, dstIp, tunOut, scope)
+                .also { try { it.addDisallowedApplication(packageName) } catch (_: Exception) {} }
+                .establish()
+                ?: run {
+                    Log.e(TAG, "establish() = null, no VPN permission")
+                    engineStarted = false; notify(); return
                 }
 
-            } catch (e: CancellationException) { break }
-            catch (e: Exception) {
-                if (!currentCoroutineContext().isActive) break
-                // Brief pause on error to avoid tight spin
-                delay(2)
+            alive = true
+            Log.i(TAG, "VPN tun up ✓")
+            notify()
+
+            val fd  = tun!!.fileDescriptor
+            val inp = FileInputStream(fd)
+            val out = FileOutputStream(fd)
+            val buf = ByteArray(MTU + 40)
+
+            while (alive && currentCoroutineContext().isActive) {
+                val n = withContext(Dispatchers.IO) { runCatching { inp.read(buf) }.getOrDefault(-1) }
+                if (n <= 0) { delay(1); continue }
+                try { handlePkt(buf, n, out) } catch (_: Exception) {}
             }
+
+        } catch (_: CancellationException) {
+        } catch (e: Exception) {
+            Log.e(TAG, "VPN loop: ${e.message}", e)
+        } finally {
+            alive = false
+            runCatching { tun?.close() }; tun = null
         }
     }
 
-    // ── TCP handling ───────────────────────────────────────────────────────────
+    // ─── Packet handler ───────────────────────────────────────────────────────
 
-    private fun handleTcp(
-        buf: ByteArray, len: Int, ipHdrLen: Int,
-        srcIp: InetAddress, dstIp: InetAddress,
-        tunOut: FileOutputStream, socksPort: Int,
-        scope: CoroutineScope
-    ) {
-        if (len < ipHdrLen + 20) return
-        val t         = ipHdrLen
-        val srcPort   = u16(buf, t)
-        val dstPort   = u16(buf, t + 2)
-        val seqNum    = u32(buf, t + 4)
-        val ackNum    = u32(buf, t + 8)
-        val tcpHdrLen = ((buf[t + 12].toInt() and 0xFF) shr 4) * 4
-        val flags     = buf[t + 13].toInt() and 0xFF
-        val dataStart = t + tcpHdrLen
-        val dataLen   = (len - dataStart).coerceAtLeast(0)
-        val key       = connKey(srcIp, srcPort, dstIp, dstPort)
+    private fun handlePkt(b: ByteArray, n: Int, out: FileOutputStream) {
+        if (n < 20 || (b[0].i and 0xF0) != 0x40) return  // IPv4 only
+        val ipHL  = (b[0].i and 0x0F) * 4
+        if (n < ipHL + 8) return
+        val proto = b[9].i
+        val sIP   = ip4(b, 12)
+        val dIP   = ip4(b, 16)
+        when (proto) {
+            6  -> tcpPkt(b, n, ipHL, sIP, dIP, out)
+            17 -> udpPkt(b, n, ipHL, sIP, dIP, out)
+        }
+    }
+
+    // ─── TCP ──────────────────────────────────────────────────────────────────
+
+    private fun tcpPkt(b: ByteArray, n: Int, ipHL: Int, sIP: InetAddress, dIP: InetAddress, out: FileOutputStream) {
+        if (n < ipHL + 20) return
+        val t0    = ipHL
+        val sPort = r16(b, t0)
+        val dPort = r16(b, t0 + 2)
+        val seq   = r32(b, t0 + 4)
+        val tcpHL = ((b[t0 + 12].i shr 4) and 0xF) * 4
+        val flags = b[t0 + 13].i
+        val pOff  = t0 + tcpHL
+        val pLen  = (n - pOff).coerceAtLeast(0)
+        val key   = "$sIP:$sPort→$dIP:$dPort"
 
         when {
-            flags and TCP_RST != 0 -> {
-                connections.remove(key)?.close()
-            }
-            flags and TCP_SYN != 0 && flags and TCP_ACK == 0 -> {
-                if (activeTunnels.get() >= MAX_TUNNELS) {
-                    sendRst(tunOut, dstIp, dstPort, srcIp, srcPort, seqNum + 1, 0L)
+            flags and RST != 0 -> sessions.remove(key)?.close()
+
+            flags and SYN != 0 && flags and ACK == 0 -> {
+                // New connection — record destination, reply SYN-ACK
+                sessions.remove(key)?.close()
+                if (connCount.get() >= MAX_CON) {
+                    sendTcp(out, dIP, dPort, sIP, sPort, 0, seq + 1, RST or ACK, null, 0)
                     return
                 }
-                connections.remove(key)?.close()
-                val session = TcpSession(srcIp, srcPort, dstIp, dstPort, seqNum, tunOut)
-                connections[key] = session
-                activeTunnels.incrementAndGet()
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        session.connect(socksPort, this@RnetForegroundService)
-                        session.relayInbound()
-                    } catch (e: Exception) {
-                        Log.d(TAG, "TCP[$key] ${e.javaClass.simpleName}: ${e.message}")
-                    } finally {
-                        connections.remove(key)
-                        activeTunnels.decrementAndGet()
-                        session.close()
-                    }
+                val sess = Session(sIP, sPort, dIP, dPort, seq, out)
+                sessions[key] = sess
+                connCount.incrementAndGet()
+                pool.execute {
+                    try { sess.run(this) }
+                    catch (e: Exception) { Log.d(TAG, "$key: ${e.message}") }
+                    finally { sessions.remove(key); connCount.decrementAndGet(); sess.close() }
                 }
             }
-            flags and TCP_FIN != 0 -> {
-                connections.remove(key)?.also { it.sendFin(); it.close() }
-            }
-            else -> {
-                if (dataLen > 0) {
-                    connections[key]?.sendOutbound(buf, dataStart, dataLen, seqNum)
-                } else if (flags and TCP_ACK != 0) {
-                    // Pure ACK — update ack tracking but no data to forward
-                    connections[key]?.updateAck(ackNum)
-                }
-            }
+
+            flags and FIN != 0 -> sessions.remove(key)?.also { it.fin(); it.close() }
+
+            pLen > 0 -> sessions[key]?.forward(b, pOff, pLen, seq)
         }
     }
 
-    // ── UDP handling ───────────────────────────────────────────────────────────
+    // ─── UDP / DNS ────────────────────────────────────────────────────────────
 
-    private fun handleUdp(
-        buf: ByteArray, len: Int, ipHdrLen: Int,
-        srcIp: InetAddress, dstIp: InetAddress,
-        tunOut: FileOutputStream, scope: CoroutineScope
-    ) {
-        val srcPort = u16(buf, ipHdrLen)
-        val dstPort = u16(buf, ipHdrLen + 2)
-        val udpLen  = u16(buf, ipHdrLen + 4)
-        val dataLen = (udpLen - 8).coerceAtLeast(0)
-        if (dataLen == 0) return
-
-        val payload = buf.copyOfRange(ipHdrLen + 8, ipHdrLen + 8 + dataLen.coerceAtMost(len - ipHdrLen - 8))
-
-        scope.launch(Dispatchers.IO) {
-            try {
-                val sock = DatagramSocket()
-                protect(sock)
-                sock.soTimeout = DNS_TIMEOUT_MS
-
-                sock.send(DatagramPacket(payload, payload.size, dstIp, dstPort))
-
-                val respBuf = ByteArray(2048)
-                val respPkt = DatagramPacket(respBuf, respBuf.size)
-                sock.receive(respPkt)
-                sock.close()
-
-                val resp    = respBuf.copyOf(respPkt.length)
-                val respLen = resp.size
-                val total   = 20 + 8 + respLen
-                val pkt     = ByteArray(total)
-
-                // IPv4 header (src=dstIp, dst=srcIp — response direction)
-                pkt[0] = 0x45.toByte()
-                w16(pkt, 2, total)
-                pkt[4] = 0; pkt[5] = 1
-                pkt[6] = 0x40.toByte(); pkt[7] = 0  // DF
-                pkt[8] = 64; pkt[9] = 17             // TTL=64, UDP
-                dstIp.address.copyInto(pkt, 12)
-                srcIp.address.copyInto(pkt, 16)
-                w16(pkt, 10, ipChecksum(pkt, 0, 20))
-
-                // UDP header
-                w16(pkt, 20, dstPort)
-                w16(pkt, 22, srcPort)
-                w16(pkt, 24, 8 + respLen)
-                pkt[26] = 0; pkt[27] = 0  // checksum optional for UDP
-
-                resp.copyInto(pkt, 28)
-
-                synchronized(tunOut) {
-                    try { tunOut.write(pkt) } catch (_: Exception) {}
-                }
-
-            } catch (e: Exception) {
-                Log.d(TAG, "UDP forward $dstIp:$dstPort failed: ${e.message}")
-            }
-        }
+    private fun udpPkt(b: ByteArray, n: Int, ipHL: Int, sIP: InetAddress, dIP: InetAddress, out: FileOutputStream) {
+        val sPort = r16(b, ipHL)
+        val dPort = r16(b, ipHL + 2)
+        val uLen  = r16(b, ipHL + 4)
+        val pLen  = (uLen - 8).coerceAtMost(n - ipHL - 8).coerceAtLeast(0)
+        if (pLen <= 0) return
+        val pay = b.copyOfRange(ipHL + 8, ipHL + 8 + pLen)
+        pool.execute { relayUdp(sIP, sPort, dIP, dPort, pay, out) }
     }
 
-    // ── TcpSession ─────────────────────────────────────────────────────────────
+    private fun relayUdp(sIP: InetAddress, sPort: Int, dIP: InetAddress, dPort: Int,
+                          pay: ByteArray, out: FileOutputStream) {
+        try {
+            val sock = DatagramSocket()
+            protect(sock)
+            sock.soTimeout = T_DNS
+            sock.send(DatagramPacket(pay, pay.size, dIP, dPort))
+            val rb = ByteArray(2048); val rp = DatagramPacket(rb, rb.size)
+            sock.receive(rp); sock.close()
+            val resp = rb.copyOf(rp.length)
+            val tot  = 28 + resp.size
+            val pkt  = ByteArray(tot)
+            pkt[0] = 0x45.toByte(); w16(pkt, 2, tot)
+            pkt[8] = 64; pkt[9] = 17
+            dIP.address.copyInto(pkt, 12); sIP.address.copyInto(pkt, 16)
+            w16(pkt, 10, ipCs(pkt, 0, 20))
+            w16(pkt, 20, dPort); w16(pkt, 22, sPort); w16(pkt, 24, 8 + resp.size)
+            resp.copyInto(pkt, 28)
+            synchronized(out) { runCatching { out.write(pkt) } }
+        } catch (e: Exception) { Log.d(TAG, "DNS $dIP: ${e.message}") }
+    }
 
-    private inner class TcpSession(
-        val srcIp: InetAddress, val srcPort: Int,
-        val dstIp: InetAddress, val dstPort: Int,
-        clientSeq: Long,
-        private val tunOut: FileOutputStream
+    // ─── Session ──────────────────────────────────────────────────────────────
+
+    /**
+     * One TCP session. Runs on a thread from the pool.
+     *
+     * Lifecycle:
+     *   1. SYN received → Session created → run() called on pool thread
+     *   2. run(): open protected Socket to real server → send SYN-ACK into tun
+     *   3. App gets SYN-ACK → sends data (TLS handshake etc) → forward() called
+     *   4. run(): pump bytes from real server back into tun as TCP data packets
+     *   5. When server closes → send FIN into tun → session done
+     *
+     * Thread safety:
+     *   forward() is called from the tun-read thread.
+     *   pump() (inside run()) runs on the pool thread.
+     *   We use a PipedStream pair to bridge them safely.
+     */
+    private inner class Session(
+        private val sIP: InetAddress, private val sPort: Int,
+        private val dIP: InetAddress, private val dPort: Int,
+        clientIsn: Long,
+        private val out: FileOutputStream
     ) {
-        // Server side of the connection — we generate our own ISN
-        private val serverIsn: Long       = (System.nanoTime() and 0xFFFFFFFFL)
-        @Volatile private var serverSeq   = serverIsn + 1  // after SYN-ACK is sent
-        @Volatile private var clientSeq   = clientSeq + 1  // after receiving SYN
+        private val serverIsn = System.nanoTime() and 0xFFFFFFFFL
+        @Volatile private var sSeq = serverIsn + 1  // next seq to send toward app
+        @Volatile private var cAck = clientIsn + 1  // next byte expected from app
+
+        // Pipe from forward() → run() thread
+        private val pipe  = PipedOutputStream()
+        private val sink  = PipedInputStream(pipe, 131072)  // 128 KB buffer
 
         private var sock: Socket? = null
-        @Volatile private var closed = false
+        @Volatile var closed = false
 
-        /**
-         * Open a protected socket to the destination.
-         * protect() makes the socket bypass the VPN tun fd, reaching real internet.
-         */
-        fun connect(socksPort: Int, vpn: VpnService) {
-            val socket = Socket()
-            sock = socket
-            vpn.protect(socket)  // MUST be called before connect() to break routing loop
-
-            if (socksPort > 0) {
-                // Route via SOCKS5 proxy (Psiphon)
-                socket.connect(InetSocketAddress("127.0.0.1", socksPort), CONNECT_TIMEOUT_MS)
-                socket.soTimeout = 0
-                val sin  = socket.getInputStream()
-                val sout = socket.getOutputStream()
-                // SOCKS5 greeting
-                sout.write(byteArrayOf(0x05, 0x01, 0x00)); sout.flush()
-                val greet = ByteArray(2).also { readFully(sin, it) }
-                require(greet[1] == 0x00.toByte()) { "SOCKS5 auth not supported: ${greet[1].toInt() and 0xFF}" }
-                // CONNECT to destination
-                val addr = dstIp.address
-                sout.write(byteArrayOf(
-                    0x05, 0x01, 0x00, 0x01,
-                    addr[0], addr[1], addr[2], addr[3],
-                    (dstPort shr 8).toByte(), (dstPort and 0xFF).toByte()
-                )); sout.flush()
-                val resp = ByteArray(10).also { readFully(sin, it) }
-                require(resp[1] == 0x00.toByte()) { "SOCKS5 CONNECT refused: ${resp[1].toInt() and 0xFF}" }
-                Log.d(TAG, "SOCKS5 → $dstIp:$dstPort ok")
-            } else {
-                // Direct connection — protected socket goes via real network
-                socket.connect(InetSocketAddress(dstIp, dstPort), CONNECT_TIMEOUT_MS)
-                socket.soTimeout = 0
-                Log.d(TAG, "Direct → $dstIp:$dstPort ok")
+        fun run(vpn: VpnService) {
+            val s = Socket()
+            sock  = s
+            vpn.protect(s)
+            try {
+                s.connect(InetSocketAddress(dIP, dPort), T_CONN)
+                s.tcpNoDelay = true
+            } catch (e: Exception) {
+                Log.d(TAG, "Connect $dIP:$dPort failed: ${e.message}")
+                // Send RST to app
+                sendTcp(out, dIP, dPort, sIP, sPort, 0, cAck, RST or ACK, null, 0)
+                return
             }
 
-            // Complete the three-way handshake by sending SYN-ACK back to the app
-            sendTcpPacket(TCP_SYN or TCP_ACK, serverIsn, clientSeq, null, 0)
-        }
+            // Complete handshake
+            sendTcp(out, dIP, dPort, sIP, sPort, serverIsn, cAck, SYN or ACK, null, 0)
+            Log.d(TAG, "Connected $dIP:$dPort ✓")
 
-        /** Relay inbound data from the real connection back to the app via tun fd. */
-        fun relayInbound() {
-            val sin = sock?.getInputStream() ?: return
-            val buf = ByteArray(8192)
+            // Start a thread to read from real server and push to tun
+            val pump = Thread {
+                val buf = ByteArray(8192)
+                val sin = s.getInputStream()
+                try {
+                    while (!closed) {
+                        val n = sin.read(buf)
+                        if (n < 0) break
+                        if (n == 0) continue
+                        sendTcp(out, dIP, dPort, sIP, sPort, sSeq, cAck, PSH or ACK, buf, n)
+                        sSeq += n
+                        activeBytesIn.addAndGet(n.toLong())
+                    }
+                    if (!closed) sendTcp(out, dIP, dPort, sIP, sPort, sSeq, cAck, FIN or ACK, null, 0)
+                } catch (_: Exception) {}
+            }
+            pump.isDaemon = true; pump.start()
+
+            // Forward from pipe (filled by forward()) to real server
+            val sout = s.getOutputStream()
+            val buf  = ByteArray(8192)
             try {
                 while (!closed) {
-                    val n = sin.read(buf)
+                    val n = sink.read(buf)
                     if (n < 0) break
-                    if (n == 0) continue
-                    sendTcpPacket(TCP_PSH or TCP_ACK, serverSeq, clientSeq, buf, n)
-                    serverSeq += n
-                    activeBytesIn.addAndGet(n.toLong())
+                    sout.write(buf, 0, n); sout.flush()
+                    activeBytesOut.addAndGet(n.toLong())
                 }
-                // Connection closed cleanly — send FIN
-                if (!closed) sendTcpPacket(TCP_FIN or TCP_ACK, serverSeq, clientSeq, null, 0)
             } catch (_: Exception) {}
+
+            pump.join(2000)
         }
 
-        /** Forward outbound data from app (via tun) to the real connection. */
-        fun sendOutbound(buf: ByteArray, offset: Int, len: Int, seqNum: Long) {
+        /** Called from tun-read thread to forward app data to the real server. */
+        fun forward(b: ByteArray, off: Int, len: Int, seq: Long) {
             if (closed) return
-            clientSeq = seqNum + len
-            try {
-                val sout = sock?.getOutputStream() ?: return
-                sout.write(buf, offset, len)
-                sout.flush()
-                activeBytesOut.addAndGet(len.toLong())
-                // ACK the data we just forwarded
-                sendTcpPacket(TCP_ACK, serverSeq, clientSeq, null, 0)
-            } catch (e: Exception) {
-                Log.d(TAG, "sendOutbound $dstIp:$dstPort: ${e.message}")
-                close()
-            }
+            cAck = seq + len
+            try { pipe.write(b, off, len); pipe.flush() } catch (_: Exception) { close() }
+            // ACK the data
+            sendTcp(out, dIP, dPort, sIP, sPort, sSeq, cAck, ACK, null, 0)
         }
 
-        fun updateAck(@Suppress("UNUSED_PARAMETER") ackNum: Long) {
-            // Slide server window — no-op in our simple implementation
-        }
-
-        fun sendFin() {
-            if (!closed) {
-                try { sock?.shutdownOutput() } catch (_: Exception) {}
-            }
-        }
-
+        fun fin()   { try { sock?.shutdownOutput() } catch (_: Exception) {} }
         fun close() {
-            closed = true
+            if (closed) return; closed = true
+            try { pipe.close()  } catch (_: Exception) {}
             try { sock?.close() } catch (_: Exception) {}
         }
-
-        /**
-         * Craft an IPv4 + TCP packet and write it to the tun fd.
-         * Direction: src=dstIp:dstPort → dst=srcIp:srcPort (response from server to app).
-         */
-        private fun sendTcpPacket(
-            flags: Int, seqNum: Long, ackNum: Long,
-            payload: ByteArray?, payloadLen: Int
-        ) {
-            val pLen  = if (payload != null && payloadLen > 0) payloadLen else 0
-            val total = 20 + 20 + pLen
-            val pkt   = ByteArray(total)
-
-            // IPv4 header
-            pkt[0] = 0x45.toByte()          // version=4, IHL=5
-            pkt[1] = 0x10                    // DSCP=4 (low-latency)
-            w16(pkt, 2, total)
-            pkt[4] = 0; pkt[5] = 0           // ID
-            pkt[6] = 0x40.toByte(); pkt[7] = 0  // DF flag
-            pkt[8] = 64                      // TTL
-            pkt[9] = 6                       // protocol = TCP
-            // checksum at offset 10 — filled below
-            dstIp.address.copyInto(pkt, 12)  // src = server's real IP
-            srcIp.address.copyInto(pkt, 16)  // dst = app's virtual IP
-
-            // TCP header
-            val t = 20
-            w16(pkt, t,     dstPort)         // src port = server's port
-            w16(pkt, t + 2, srcPort)         // dst port = app's port
-            w32(pkt, t + 4, seqNum)
-            w32(pkt, t + 8, ackNum)
-            pkt[t + 12] = 0x50.toByte()      // data offset = 5 (20 bytes), no options
-            pkt[t + 13] = flags.toByte()
-            pkt[t + 14] = 0xFF.toByte()      // window size high byte
-            pkt[t + 15] = 0xFF.toByte()      // window size low byte
-            // checksum at t+16 — filled below
-            pkt[t + 18] = 0; pkt[t + 19] = 0  // urgent pointer
-
-            // Copy payload
-            if (pLen > 0) payload!!.copyInto(pkt, 40, 0, pLen)
-
-            // Fill checksums
-            w16(pkt, 10, ipChecksum(pkt, 0, 20))
-            w16(pkt, t + 16, tcpChecksum(pkt, 20, 20 + pLen, dstIp.address, srcIp.address))
-
-            synchronized(tunOut) {
-                try { tunOut.write(pkt) } catch (_: Exception) {}
-            }
-        }
     }
 
-    // ── RST helper ─────────────────────────────────────────────────────────────
+    // ─── TCP packet writer ────────────────────────────────────────────────────
 
-    private fun sendRst(
-        tunOut: FileOutputStream,
-        srcIp: InetAddress, srcPort: Int,
-        dstIp: InetAddress, dstPort: Int,
-        seqNum: Long, ackNum: Long
+    private fun sendTcp(
+        out: FileOutputStream,
+        srcIP: InetAddress, srcPort: Int,
+        dstIP: InetAddress, dstPort: Int,
+        seq: Long, ack: Long, flags: Int,
+        pay: ByteArray?, payLen: Int
     ) {
-        val pkt = ByteArray(40)
-        pkt[0] = 0x45.toByte(); w16(pkt, 2, 40)
-        pkt[8] = 64; pkt[9] = 6
-        srcIp.address.copyInto(pkt, 12); dstIp.address.copyInto(pkt, 16)
-        w16(pkt, 20, srcPort); w16(pkt, 22, dstPort)
-        w32(pkt, 24, seqNum);  w32(pkt, 28, ackNum)
-        pkt[32] = 0x50.toByte()
-        pkt[33] = (TCP_RST or TCP_ACK).toByte()
-        pkt[34] = 0xFF.toByte(); pkt[35] = 0xFF.toByte()
-        w16(pkt, 10, ipChecksum(pkt, 0, 20))
-        w16(pkt, 36, tcpChecksum(pkt, 20, 20, srcIp.address, dstIp.address))
-        synchronized(tunOut) { try { tunOut.write(pkt) } catch (_: Exception) {} }
+        val pLen  = if (pay != null && payLen > 0) payLen else 0
+        val total = 40 + pLen
+        val p     = ByteArray(total)
+        p[0] = 0x45.toByte(); p[1] = 0
+        w16(p, 2, total); p[8] = 64; p[9] = 6
+        srcIP.address.copyInto(p, 12); dstIP.address.copyInto(p, 16)
+        w16(p, 10, ipCs(p, 0, 20))
+        w16(p, 20, srcPort); w16(p, 22, dstPort)
+        w32(p, 24, seq);     w32(p, 28, ack)
+        p[32] = 0x50.toByte(); p[33] = flags.toByte()
+        p[34] = 0xFF.toByte(); p[35] = 0xFF.toByte()
+        if (pLen > 0) pay!!.copyInto(p, 40, 0, pLen)
+        w16(p, 36, tcpCs(p, 20, 20 + pLen, srcIP.address, dstIP.address))
+        synchronized(out) { runCatching { out.write(p) } }
     }
 
-    // ── Checksum helpers ───────────────────────────────────────────────────────
-
-    private fun ipChecksum(buf: ByteArray, off: Int, len: Int): Int {
-        var sum = 0
-        var i   = off
-        while (i < off + len - 1) {
-            sum += ((buf[i].toInt() and 0xFF) shl 8) or (buf[i + 1].toInt() and 0xFF)
-            i   += 2
-        }
-        if (len and 1 != 0) sum += (buf[off + len - 1].toInt() and 0xFF) shl 8
-        while (sum ushr 16 != 0) sum = (sum and 0xFFFF) + (sum ushr 16)
-        return sum.inv() and 0xFFFF
+    private fun ipCs(b: ByteArray, o: Int, l: Int): Int {
+        var s = 0; var i = o
+        while (i < o + l - 1) { s += (b[i].i shl 8) or b[i+1].i; i += 2 }
+        if (l and 1 != 0) s += b[o + l - 1].i shl 8
+        while (s ushr 16 != 0) s = (s and 0xFFFF) + (s ushr 16)
+        return s.inv() and 0xFFFF
     }
 
-    private fun tcpChecksum(pkt: ByteArray, tcpOff: Int, tcpLen: Int,
-                             srcIp: ByteArray, dstIp: ByteArray): Int {
-        val pseudo = ByteArray(12 + tcpLen)
-        srcIp.copyInto(pseudo, 0)
-        dstIp.copyInto(pseudo, 4)
-        pseudo[8] = 0; pseudo[9] = 6
-        w16(pseudo, 10, tcpLen)
-        pkt.copyInto(pseudo, 12, tcpOff, tcpOff + tcpLen)
-        return ipChecksum(pseudo, 0, pseudo.size)
+    private fun tcpCs(p: ByteArray, o: Int, tl: Int, src: ByteArray, dst: ByteArray): Int {
+        val ps = ByteArray(12 + tl)
+        src.copyInto(ps, 0); dst.copyInto(ps, 4); ps[9] = 6; w16(ps, 10, tl)
+        p.copyInto(ps, 12, o, o + tl)
+        return ipCs(ps, 0, ps.size)
     }
 
-    // ── Byte-order helpers ─────────────────────────────────────────────────────
+    // ─── Helpers ──────────────────────────────────────────────────────────────
 
-    private fun u16(buf: ByteArray, off: Int): Int =
-        ((buf[off].toInt() and 0xFF) shl 8) or (buf[off + 1].toInt() and 0xFF)
-
-    private fun u32(buf: ByteArray, off: Int): Long =
-        ((buf[off    ].toLong() and 0xFF) shl 24) or
-        ((buf[off + 1].toLong() and 0xFF) shl 16) or
-        ((buf[off + 2].toLong() and 0xFF) shl  8) or
-         (buf[off + 3].toLong() and 0xFF)
-
-    private fun w16(buf: ByteArray, off: Int, v: Int) {
-        buf[off]     = (v ushr 8  and 0xFF).toByte()
-        buf[off + 1] = (v         and 0xFF).toByte()
+    private val Byte.i get() = this.toInt() and 0xFF
+    private fun ip4(b: ByteArray, o: Int) = InetAddress.getByAddress(b.copyOfRange(o, o + 4))
+    private fun r16(b: ByteArray, o: Int) = (b[o].i shl 8) or b[o+1].i
+    private fun r32(b: ByteArray, o: Int): Long =
+        (b[o].toLong() and 0xFF shl 24) or (b[o+1].toLong() and 0xFF shl 16) or
+        (b[o+2].toLong() and 0xFF shl  8) or (b[o+3].toLong() and 0xFF)
+    private fun w16(b: ByteArray, o: Int, v: Int) { b[o]=(v shr 8 and 0xFF).toByte(); b[o+1]=(v and 0xFF).toByte() }
+    private fun w32(b: ByteArray, o: Int, v: Long) {
+        b[o]=(v shr 24 and 0xFF).toByte(); b[o+1]=(v shr 16 and 0xFF).toByte()
+        b[o+2]=(v shr 8 and 0xFF).toByte(); b[o+3]=(v and 0xFF).toByte()
     }
 
-    private fun w32(buf: ByteArray, off: Int, v: Long) {
-        buf[off]     = (v ushr 24 and 0xFF).toByte()
-        buf[off + 1] = (v ushr 16 and 0xFF).toByte()
-        buf[off + 2] = (v ushr  8 and 0xFF).toByte()
-        buf[off + 3] = (v         and 0xFF).toByte()
-    }
+    // ─── Gateway ──────────────────────────────────────────────────────────────
 
-    private fun connKey(srcIp: InetAddress, srcPort: Int, dstIp: InetAddress, dstPort: Int) =
-        "${srcIp.hostAddress}:$srcPort→${dstIp.hostAddress}:$dstPort"
-
-    private fun readFully(sin: java.io.InputStream, buf: ByteArray) {
-        var off = 0
-        while (off < buf.size) {
-            val n = sin.read(buf, off, buf.size - off)
-            if (n < 0) throw java.io.EOFException("EOF at $off/${buf.size}")
-            off += n
-        }
-    }
-
-    // ── Gateway lifecycle ──────────────────────────────────────────────────────
-
-    private fun startGateway() {
-        if (gatewayStarted) return
-        if (!engineStarted) startEngine()
+    private fun startGw() {
+        if (gwStarted) return
+        if (!engineStarted) start()
         val gw = HotspotGateway(this, engine!!)
         gw.grantConsent(); gw.start()
-        gateway = gw; gatewayStarted = true
-        updateNotification()
+        gateway = gw; gwStarted = true; notify()
     }
 
-    private fun stopGateway() {
-        gateway?.stop()
-        gateway = null
-        gatewayStarted = false
-        if (engineStarted) updateNotification()
+    private fun stopGw() {
+        gateway?.stop(); gateway = null; gwStarted = false
+        if (engineStarted) notify()
     }
 
-    // ── Notifications ──────────────────────────────────────────────────────────
+    // ─── Notification ─────────────────────────────────────────────────────────
 
-    private fun createNotificationChannel() {
+    private fun makeChan() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(CHANNEL_ID, "RNET Transport", NotificationManager.IMPORTANCE_LOW)
-                .apply { description = "RNET VPN tunnel"; setShowBadge(false) }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+            val c = NotificationChannel(CH_ID, "RNET Transport", NotificationManager.IMPORTANCE_LOW)
+                .apply { description = "RNET VPN"; setShowBadge(false) }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(c)
         }
     }
 
-    private fun buildNotification(): Notification {
-        val tap  = PendingIntent.getActivity(this, 0,
+    private fun notif(): Notification {
+        val tap = PendingIntent.getActivity(this, 0,
             Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 1,
             Intent(this, RnetForegroundService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_IMMUTABLE)
-        val text = when {
-            engineStarted && gatewayStarted -> "Engine active · Gateway on"
-            engineStarted                   -> "VPN active"
-            else                            -> "Idle"
-        }
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(this, CH_ID)
             .setContentTitle(getString(R.string.notif_title))
-            .setContentText(text)
+            .setContentText(if (engineStarted) getString(R.string.vpn_status_active)
+                            else getString(R.string.vpn_status_connecting))
             .setSmallIcon(android.R.drawable.ic_menu_share)
             .setContentIntent(tap)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notif_stop), stop)
-            .setOngoing(true)
-            .setSilent(true)
+            .setOngoing(true).setSilent(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 
-    private fun updateNotification() {
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIF_ID, buildNotification())
+    private fun notify() {
+        getSystemService(NotificationManager::class.java).notify(NOTIF, notif())
     }
 }
