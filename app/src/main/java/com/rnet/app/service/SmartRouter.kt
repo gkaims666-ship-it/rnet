@@ -25,10 +25,12 @@ import java.util.concurrent.Executors
  */
 class SmartRouter(
     private val pool: TunnelPool,
-    private val preferredRegion: String,
+    preferredRegion: String,
     private val vpnService: android.net.VpnService,
     private val context: Context? = null    // null = no persistence
 ) {
+    // Mutable so hot region swap can update it without recreating the router
+    @Volatile private var preferredRegion: String = preferredRegion
     data class RouteEntry(
         val proxy: String,
         val port: Int,
@@ -176,6 +178,21 @@ class SmartRouter(
     }
 
     fun clearBlacklist() { failMap.clear(); regionFailMap.clear() }
+
+    /** Hot-swap the preferred exit region — new connections will probe via newRegion first. */
+    fun setPreferredRegion(newRegion: String) {
+        preferredRegion = newRegion
+        lastRoutedRegion = newRegion
+    }
+
+    /** Clear all cached routes so the next connection re-probes via the new preferred region. */
+    fun clearAllRoutes() {
+        cache.clear()
+        context?.let { RouteStore.evictExpired() }
+        routeCacheSize = 0
+        // Also reset circuit breakers so new region gets a fair chance
+        regionFailMap.clear()
+    }
 
     private fun recordRegionFailure(region: String) {
         val now = System.currentTimeMillis()

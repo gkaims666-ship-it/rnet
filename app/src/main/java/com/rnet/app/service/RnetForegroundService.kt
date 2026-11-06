@@ -54,6 +54,8 @@ class RnetForegroundService : VpnService() {
         const val ACTION_STOP          = "com.rnet.STOP"
         const val ACTION_GATEWAY_START = "com.rnet.GATEWAY_START"
         const val ACTION_GATEWAY_STOP  = "com.rnet.GATEWAY_STOP"
+        const val ACTION_CHANGE_REGION = "com.rnet.CHANGE_REGION"
+        const val EXTRA_REGION         = "region"
 
         private const val TAG    = "RnetVPN"
         private const val CH_ID  = "rnet_svc"
@@ -146,6 +148,7 @@ class RnetForegroundService : VpnService() {
             ACTION_STOP          -> { stop(); stopGw() }
             ACTION_GATEWAY_START -> startGw()
             ACTION_GATEWAY_STOP  -> stopGw()
+            ACTION_CHANGE_REGION -> i.getStringExtra(EXTRA_REGION)?.let { changeRegion(it) }
         }
         return START_STICKY
     }
@@ -191,11 +194,14 @@ class RnetForegroundService : VpnService() {
 
     private fun stop() {
         if (!engineStarted) return
-        engineStarted = false; alive = false
+        engineStarted = false
         connectionPhase = ConnectionPhase.IDLE; proxyLabel = "—"
         sessions.values.forEach { runCatching { it.close() } }; sessions.clear()
-        readerThread?.interrupt(); writerThread?.interrupt()
+        // Crash fix: set alive=false AFTER queueing poison pill so writer thread
+        // doesn't hang in poll() forever waiting for the terminator that never arrives.
         writeQueue.clear(); writeQueue.offer(ByteArray(0))
+        alive = false
+        readerThread?.interrupt(); writerThread?.interrupt()
         try { tun?.close() } catch (_: Exception) {}; tun = null
         // Save caches to disk before stopping
         smartRouter?.connPool?.stopAll()
@@ -211,8 +217,65 @@ class RnetForegroundService : VpnService() {
         if (!gwStarted) stopSelf()
     }
 
+    // ── Live region hot-swap (no VPN disconnect needed) ───────────────────────
+    /**
+     * Change exit country without stopping the VPN.
+     * 1. Update exit region state variables
+     * 2. Tell SmartRouter to prefer the new region from now on
+     * 3. Clear per-destination route cache so connections re-probe via new region
+     * 4. Warm up the new region's tunnel in background
+     * 5. Update UI + notification
+     */
+    private fun changeRegion(newRegion: String) {
+        if (!engineStarted) {
+            // Not connected yet — just store preference
+            pendingRegion = newRegion
+            exitRegion = newRegion
+            return
+        }
+        if (newRegion == exitRegion) return   // no-op
+
+        Log.i(TAG, "Hot region swap: $exitRegion → $newRegion")
+        pendingRegion = newRegion
+        exitRegion = newRegion
+        proxyLabel = "Switching to $newRegion…"
+        postNotif()
+
+        // Persist preference
+        getSharedPreferences("rnet_prefs", MODE_PRIVATE)
+            .edit().putString("exit_region", newRegion).apply()
+
+        // Update SmartRouter's preferred region and clear cached routes
+        // (new connections will re-probe and find new region tunnel)
+        val router = smartRouter
+        if (router != null) {
+            router.setPreferredRegion(newRegion)
+            router.clearAllRoutes()
+        }
+
+        // Warm up the new tunnel in background, then update label
+        svcScope.launch {
+            val tp = tunnelPool ?: return@launch
+            val port = tp.getSocksPort(newRegion)
+            if (port > 0) {
+                activeSocksPort = port
+                exitRegion = newRegion
+                proxyLabel = "Smart·$newRegion"
+                val city = LocationMasker.start(applicationContext, newRegion)
+                if (city != null) Log.i(TAG, "GPS → $city")
+            } else {
+                Log.w(TAG, "New region $newRegion tunnel failed — keeping existing")
+                proxyLabel = "Smart·$exitRegion"
+            }
+            postNotif()
+        }
+    }
+
     // ── Network change handling (seamless WiFi↔cellular handoff) ─────────────
     private fun registerNetworkCallback() {
+        // Crash fix: unregister any existing callback before registering a new one
+        // to prevent double-registration on service restart
+        unregisterNetworkCallback()
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 val prev = lastNetwork
@@ -249,12 +312,13 @@ class RnetForegroundService : VpnService() {
     private suspend fun rebuildTun() = withContext(Dispatchers.IO) {
         if (!engineStarted) return@withContext
         Log.i(TAG, "Rebuilding tun after network change")
-        // Interrupt reader — it will exit its loop, vpnLoop will restart
+        // Crash fix: close the tun fd directly — this causes the blocking read() in
+        // readerThread to return -1/IOException immediately, which makes the reader
+        // exit cleanly. vpnLoop then re-establishes. Do NOT delay() after interrupt()
+        // as the reader may be mid-packet and delay creates a race with alive.
+        try { tun?.close() } catch (_: Exception) {}
+        // Also interrupt the reader in case it's not in a blocking read right now
         readerThread?.interrupt()
-        // Brief wait for reader to exit
-        delay(300)
-        // vpnLoop detects alive=true and loops back to re-establish
-        // (reader exits on IOException, vpnLoop restarts if alive still true)
     }
 
     // ── Tunnel warmup ────────────────────────────────────────────────────────
@@ -319,12 +383,19 @@ class RnetForegroundService : VpnService() {
                 if (!tp.isReady(region)) continue
                 val port = tp.getSocksPort(region)
                 if (port <= 0) continue
+                // Crash fix: use use{} to guarantee socket close even on exception
                 val healthy = try {
-                    val s = Socket(); protect(s)
-                    s.connect(InetSocketAddress("127.0.0.1", port), 2000)
-                    s.getOutputStream().write(byteArrayOf(0x05, 0x01, 0x00)); s.getOutputStream().flush()
-                    val resp = ByteArray(2); s.getInputStream().read(resp); s.close()
-                    resp[0] == 0x05.toByte() && resp[1] == 0x00.toByte()
+                    val s = Socket()
+                    protect(s)
+                    s.soTimeout = 2000
+                    s.use {
+                        it.connect(InetSocketAddress("127.0.0.1", port), 2000)
+                        it.getOutputStream().write(byteArrayOf(0x05, 0x01, 0x00))
+                        it.getOutputStream().flush()
+                        val resp = ByteArray(2)
+                        val n = it.getInputStream().read(resp)
+                        n == 2 && resp[0] == 0x05.toByte() && resp[1] == 0x00.toByte()
+                    }
                 } catch (_: Exception) { false }
 
                 if (!healthy) {
@@ -425,10 +496,13 @@ class RnetForegroundService : VpnService() {
             val out = FileOutputStream(fd)
 
             // Writer thread
+            // Crash fix: check that the fd is still the one we opened (tun === newTun)
+            // before each write. If tun changed (rebuildTun closed it), exit cleanly.
             val writer = Thread({
                 while (alive || !writeQueue.isEmpty()) {
                     val pkt = writeQueue.poll(200, TimeUnit.MILLISECONDS) ?: continue
                     if (pkt.isEmpty()) break
+                    if (tun !== newTun) break   // fd replaced — stop writing to stale fd
                     try { out.write(pkt) } catch (_: Exception) { break }
                 }
             }, "rnet-writer")

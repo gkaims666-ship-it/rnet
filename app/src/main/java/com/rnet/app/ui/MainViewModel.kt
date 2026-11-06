@@ -163,12 +163,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Set the preferred Psiphon exit region (e.g. "IS", "DE", "US").
-     * Persisted to SharedPreferences. Takes effect on next VPN restart.
+     * If the engine is running, sends ACTION_CHANGE_REGION for a live hot-swap
+     * (no VPN disconnect required). Otherwise persists for next start.
      */
     fun setExitRegion(region: String) {
         prefs.edit().putString("exit_region", region).apply()
-        // Update companion object so next start() picks up the new value
         RnetForegroundService.pendingRegion = region
         _ui.update { it.copy(exitRegion = region) }
+
+        val ctx = getApplication<Application>().applicationContext
+        if (_ui.value.engineActive) {
+            // Live hot-swap — service handles the region change without disconnecting
+            val intent = Intent(ctx, RnetForegroundService::class.java).apply {
+                action = RnetForegroundService.ACTION_CHANGE_REGION
+                putExtra(RnetForegroundService.EXTRA_REGION, region)
+            }
+            ctx.startService(intent)
+        }
     }
 }

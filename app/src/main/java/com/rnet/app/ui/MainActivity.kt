@@ -207,7 +207,13 @@ fun RnetDashboard(
             }
 
             // ---- Exit region picker ----
-            RegionPickerCard(uiState.exitRegion, onRegionChange)
+            RegionPickerCard(
+                selectedRegion   = uiState.exitRegion,
+                onSelect         = onRegionChange,
+                engineActive     = uiState.engineActive,
+                connectionPhase  = uiState.connectionPhase,
+                proxyLabel       = uiState.proxyLabel
+            )
 
             // ---- Resilient Core opt-in (Psiphon decentralized routing) ----
             ResilientCoreCard(uiState.useResilientCore, onResilientCoreToggle)
@@ -425,9 +431,28 @@ private val ALL_REGIONS = listOf(
 )
 
 @Composable
-private fun RegionPickerCard(selectedRegion: String, onSelect: (String) -> Unit) {
+private fun RegionPickerCard(
+    selectedRegion: String,
+    onSelect: (String) -> Unit,
+    engineActive: Boolean = false,
+    connectionPhase: ConnectionPhase = ConnectionPhase.IDLE,
+    proxyLabel: String = ""
+) {
     var expanded by remember { mutableStateOf(false) }
     val current = ALL_REGIONS.find { it.code == selectedRegion } ?: ALL_REGIONS[0]
+
+    // Detect "switching" state: engine is active and proxy label shows the switch in progress
+    val isSwitching = engineActive && proxyLabel.startsWith("Switching")
+
+    // Pulsing animation for the switch-in-progress indicator
+    val infiniteTransition = rememberInfiniteTransition(label = "switchPulse")
+    val switchAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f, targetValue = 0.3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ), label = "switchAlpha"
+    )
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -435,12 +460,36 @@ private fun RegionPickerCard(selectedRegion: String, onSelect: (String) -> Unit)
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            CardHeader(
-                icon = Icons.Filled.Language,
-                title = "Exit Country",
-                iconTint = Color(0xFF80DEEA),
-                iconBg = Color(0xFF0A1A1E)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CardHeader(
+                    icon = Icons.Filled.Language,
+                    title = "Exit Country",
+                    iconTint = Color(0xFF80DEEA),
+                    iconBg = Color(0xFF0A1A1E)
+                )
+                // Live status badge — shows only when connected
+                if (engineActive) {
+                    if (isSwitching) {
+                        Text(
+                            text = "• Switching…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFFFB74D).copy(alpha = switchAlpha),
+                            fontWeight = FontWeight.Medium
+                        )
+                    } else if (connectionPhase == ConnectionPhase.ACTIVE) {
+                        Text(
+                            text = "• Live",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF4CAF50),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(10.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
             Spacer(Modifier.height(12.dp))
@@ -503,12 +552,17 @@ private fun RegionPickerCard(selectedRegion: String, onSelect: (String) -> Unit)
                 }
             }
 
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "Change takes effect on next VPN restart",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-            )
+            // Contextual hint — no longer says "restart required"
+            if (engineActive) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = if (isSwitching) "Reconnecting new exit node…"
+                           else "Changes apply instantly — no disconnect needed",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isSwitching) Color(0xFFFFB74D).copy(alpha = 0.8f)
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                )
+            }
         }
     }
 }
