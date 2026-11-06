@@ -121,7 +121,7 @@ class RnetForegroundService : VpnService() {
         activeBytesIn.set(0); activeBytesOut.set(0)
         cellMon!!.start()
         svcScope.launch { vpnLoop() }
-        notify()
+        postNotif()
     }
 
     private fun stop() {
@@ -132,7 +132,7 @@ class RnetForegroundService : VpnService() {
         engine?.let { runCatching { it.stop() } }; engine = null
         cellMon?.stop()
         activeSocksPort = 0; activeBytesIn.set(0); activeBytesOut.set(0)
-        notify()
+        postNotif()
         if (!gwStarted) stopSelf()
     }
 
@@ -152,12 +152,12 @@ class RnetForegroundService : VpnService() {
                 .establish()
                 ?: run {
                     Log.e(TAG, "establish() = null, no VPN permission")
-                    engineStarted = false; notify(); return
+                    engineStarted = false; postNotif(); return
                 }
 
             alive = true
             Log.i(TAG, "VPN tun up ✓")
-            notify()
+            postNotif()
 
             val fd  = tun!!.fileDescriptor
             val inp = FileInputStream(fd)
@@ -431,12 +431,12 @@ class RnetForegroundService : VpnService() {
         if (!engineStarted) start()
         val gw = HotspotGateway(this, engine!!)
         gw.grantConsent(); gw.start()
-        gateway = gw; gwStarted = true; notify()
+        gateway = gw; gwStarted = true; postNotif()
     }
 
     private fun stopGw() {
         gateway?.stop(); gateway = null; gwStarted = false
-        if (engineStarted) notify()
+        if (engineStarted) postNotif()
     }
 
     // ─── Notification ─────────────────────────────────────────────────────────
@@ -467,7 +467,7 @@ class RnetForegroundService : VpnService() {
             .build()
     }
 
-    private fun notify() {
+    private fun postNotif() {
         getSystemService(NotificationManager::class.java).notify(NOTIF, notif())
     }
 }
