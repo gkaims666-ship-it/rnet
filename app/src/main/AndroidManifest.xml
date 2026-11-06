@@ -11,18 +11,19 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <!-- ── Wi-Fi hotspot / tethering (declared; requires user to enable via Settings) ── -->
+    <!-- ── Wi-Fi hotspot / tethering ── -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
-    <!-- ── Foreground service (DATA_SYNC type) ── -->
+    <!-- ── Foreground service ── -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <!-- ── Notifications (Android 13+) ── -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- ── Wake lock to prevent CPU sleep during active transport ── -->
+    <!-- ── Wake lock ── -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- ── BLE (API 31+) ── -->
@@ -30,16 +31,12 @@
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <!-- Legacy BLE (API ≤ 30) -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
 
-    <!-- ── Wi-Fi Direct (NEARBY_WIFI_DEVICES, API 33+) ── -->
+    <!-- ── Wi-Fi Direct (API 33+) ── -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation" />
-
-    <!-- ── VPN foreground service type ── -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <application
         android:name=".RnetApplication"
@@ -73,29 +70,28 @@
             android:exported="false"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
 
-        <!-- ── Foreground transport service ── -->
-        <service
-            android:name=".service.RnetForegroundService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync"
-            android:stopWithTask="false" />
-
-        <!-- ── VPN service — routes all device traffic through Psiphon ── -->
-        <service
-            android:name=".service.RnetVpnService"
-            android:exported="false"
-            android:foregroundServiceType="connectedDevice"
-            android:permission="android.permission.BIND_VPN_SERVICE">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
-        </service>
-
         <!-- ── FAQ activity ── -->
         <activity
             android:name=".ui.FaqActivity"
             android:exported="false"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
+
+        <!--
+            RnetForegroundService extends VpnService.
+            foregroundServiceType must include connectedDevice (required for VPN on Android 14+).
+            The android.net.VpnService intent-filter is required by VpnService.prepare().
+            android:permission="android.permission.BIND_VPN_SERVICE" is required.
+        -->
+        <service
+            android:name=".service.RnetForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync|connectedDevice"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:stopWithTask="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
 
     </application>
 

@@ -50,8 +50,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             while (true) {
                 delay(1_000)
-                val bytesIn  = RnetForegroundService.activeBytesIn
-                val bytesOut = RnetForegroundService.activeBytesOut
+                val bytesIn  = RnetForegroundService.activeBytesIn.get()
+                val bytesOut = RnetForegroundService.activeBytesOut.get()
                 if (bytesIn != _ui.value.totalBytesIn || bytesOut != _ui.value.totalBytesOut) {
                     _ui.update { it.copy(totalBytesIn = bytesIn, totalBytesOut = bytesOut) }
                 }
