@@ -68,7 +68,7 @@
     <!-- VPN status messages -->
     <string name="vpn_status_connecting">Connecting…</string>
     <string name="vpn_status_starting_tunnel">Starting Psiphon tunnel…</string>
-    <string name="vpn_status_active">Active — routing via Psiphon</string>
+    <string name="vpn_status_active">Active — routing traffic</string>
     <string name="vpn_status_failed">Failed to connect</string>
 
     <!-- Resilient Core (Psiphon) opt-in -->

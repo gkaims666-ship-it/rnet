@@ -53,7 +53,7 @@
     <!-- VPN status messages -->
     <string name="vpn_status_connecting">Подключение…</string>
     <string name="vpn_status_starting_tunnel">Запуск туннеля Psiphon…</string>
-    <string name="vpn_status_active">Активен — маршрутизация через Psiphon</string>
+    <string name="vpn_status_active">Активен — трафик маршрутизируется</string>
     <string name="vpn_status_failed">Не удалось подключиться</string>
 
     <!-- Resilient Core -->

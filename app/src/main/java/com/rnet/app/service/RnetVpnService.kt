@@ -23,28 +23,33 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * RnetVpnService — Android VpnService that captures all device IP traffic
- * and routes it through the SOCKS5 proxy managed by RnetForegroundService.
+ * and routes it through a SOCKS5 proxy OR directly to the internet.
  *
- * IMPORTANT: This service does NOT start Psiphon itself.
- * PsiphonTransport is owned by RnetForegroundService. When the SOCKS5 port
- * is ready, RnetForegroundService stores it in [RnetForegroundService.activeSocksPort]
- * and starts this service with that port as an Intent extra.
+ * Operation modes (determined by EXTRA_SOCKS_PORT in start intent):
  *
- * Traffic flow (tun2socks pattern):
- *   1. Receive SOCKS5 port in ACTION_START intent extra (from RnetForegroundService).
- *   2. Establish a VPN tun interface capturing all IPv4 traffic.
- *   3. Read IP packets from tun fd, parse TCP headers.
- *   4. For each new TCP SYN: open a SOCKS5 tunnel to (destIp:destPort) through
- *      the Psiphon proxy at 127.0.0.1:socksPort.
- *   5. Track per-connection TCP state (seq/ack numbers, window size).
- *   6. Forward TCP payload bidirectionally with correct seq/ack tracking.
- *   7. Write crafted response packets back to the tun fd.
+ *   MODE 1: Direct routing (socksPort == 0, default)
+ *     The VPN tun interface is established, and each TCP connection is forwarded
+ *     directly to the destination using a protected Socket. This bypasses the
+ *     VPN interface itself to reach the real network, which is the standard
+ *     tun2socks pattern used by all VPN clients (WireGuard, OpenVPN, etc.).
+ *
+ *   MODE 2: SOCKS5 proxy routing (socksPort > 0)
+ *     Same as above but traffic is tunnelled through a local SOCKS5 proxy
+ *     (e.g. Psiphon) before reaching the destination. Only used when the user
+ *     explicitly enables "Route via Resilient Core."
+ *
+ * Traffic flow:
+ *   App → kernel → tun fd → RnetVpnService → (optionally SOCKS5) → internet
+ *
+ * The service calls protect() on every outbound Socket so the routing loop
+ * is broken: protected sockets bypass the VPN and use the underlying network.
  */
 class RnetVpnService : VpnService() {
 
     companion object {
         const val ACTION_START      = "com.rnet.VPN_START"
         const val ACTION_STOP       = "com.rnet.VPN_STOP"
+        /** Pass a valid SOCKS5 port here to route through a proxy; omit or 0 for direct routing. */
         const val EXTRA_SOCKS_PORT  = "socks_port"
 
         private const val TAG           = "RnetVpnService"
@@ -54,6 +59,7 @@ class RnetVpnService : VpnService() {
         private const val VPN_ROUTE     = "0.0.0.0"
         private const val VPN_PREFIX    = 0
         private const val VPN_MTU       = 1500
+        private const val CONNECT_TIMEOUT_MS = 15_000
 
         // TCP flag constants
         private const val TCP_FIN = 0x01
@@ -62,7 +68,7 @@ class RnetVpnService : VpnService() {
         private const val TCP_ACK = 0x10
         private const val TCP_PSH = 0x08
 
-        private const val MAX_TUNNELS   = 64
+        private const val MAX_TUNNELS   = 128
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -84,12 +90,8 @@ class RnetVpnService : VpnService() {
                 START_NOT_STICKY
             }
             else -> {
+                // socksPort == 0 means direct routing mode (default, always works)
                 val socksPort = intent?.getIntExtra(EXTRA_SOCKS_PORT, 0) ?: 0
-                if (socksPort <= 0) {
-                    Log.e(TAG, "ACTION_START received without valid SOCKS port — stopping")
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
 
                 serviceScope?.cancel()
                 serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -122,17 +124,19 @@ class RnetVpnService : VpnService() {
                 .addRoute(VPN_ROUTE, VPN_PREFIX)
                 .setBlocking(true)
 
+            // Exclude our own app so we don't loop
             try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
 
             vpnInterface = builder.establish()
                 ?: run {
-                    Log.e(TAG, "VPN interface could not be established")
+                    Log.e(TAG, "VPN interface could not be established — VPN permission not granted")
                     stopSelf()
                     return
                 }
 
+            val mode = if (socksPort > 0) "SOCKS5 :$socksPort" else "direct"
             updateNotification(getString(R.string.vpn_status_active))
-            Log.i(TAG, "VPN interface established, forwarding via SOCKS5 :$socksPort")
+            Log.i(TAG, "VPN interface established, routing mode: $mode")
 
             readPacketLoop(vpnInterface!!, socksPort)
 
@@ -175,13 +179,12 @@ class RnetVpnService : VpnService() {
                 val dstIp = InetAddress.getByAddress(buf.copyOfRange(16, 20))
 
                 val to = ipHdrLen
-                val srcPort = readUShort(buf, to)
-                val dstPort = readUShort(buf, to + 2)
-                val seqNum  = readUInt(buf, to + 4)
-                val ackNum  = readUInt(buf, to + 8)
+                val srcPort   = readUShort(buf, to)
+                val dstPort   = readUShort(buf, to + 2)
+                val seqNum    = readUInt  (buf, to + 4)
+                val ackNum    = readUInt  (buf, to + 8)
                 val tcpHdrLen = ((buf[to + 12].toInt() and 0xFF) shr 4) * 4
-                val flags   = buf[to + 13].toInt() and 0xFF
-                val window  = readUShort(buf, to + 14)
+                val flags     = buf[to + 13].toInt() and 0xFF
 
                 val dataStart = to + tcpHdrLen
                 val dataLen   = len - dataStart
@@ -193,11 +196,14 @@ class RnetVpnService : VpnService() {
                         connections.remove(key)?.close()
                     }
                     flags and TCP_SYN != 0 && flags and TCP_ACK == 0 -> {
-                        // New connection — open a SOCKS5 tunnel
+                        // New connection — open tunnel to destination
                         if (activeTunnels.get() >= MAX_TUNNELS) {
                             sendRst(tunOut, dstIp, dstPort, srcIp, srcPort, seqNum + 1, 0)
                             continue
                         }
+                        // Close any stale session for this key
+                        connections.remove(key)?.close()
+
                         val session = TcpSession(
                             srcIp = srcIp, srcPort = srcPort,
                             dstIp = dstIp, dstPort = dstPort,
@@ -225,7 +231,7 @@ class RnetVpnService : VpnService() {
                         connections.remove(key)?.close()
                     }
                     else -> {
-                        // Data or ACK — route to existing session
+                        // Data or pure ACK
                         if (dataLen > 0) {
                             connections[key]?.sendOutbound(buf, dataStart, dataLen, seqNum, ackNum)
                         }
@@ -246,74 +252,93 @@ class RnetVpnService : VpnService() {
     // ── TCP Session ───────────────────────────────────────────────────────────
 
     /**
-     * One proxied TCP connection. Tracks sequence numbers both ways so the
-     * crafted response packets are accepted by the kernel.
+     * One proxied TCP connection. Opens a protected socket to the destination
+     * (directly or via SOCKS5), tracks TCP sequence numbers, and relays data
+     * bidirectionally between the socket and the tun fd.
      */
     private inner class TcpSession(
         val srcIp: InetAddress,
         val srcPort: Int,
         val dstIp: InetAddress,
         val dstPort: Int,
-        clientSeq: Long,              // ISN from the client's SYN
+        clientSeq: Long,
         private val tunOut: FileOutputStream
     ) {
-        // Server→client direction (we are the "server" from the VPN's perspective)
-        private val serverIsn: Long    = 0x12345678L   // our initial sequence number
+        // Server→client direction (we act as "server" on the VPN side)
+        private val serverIsn: Long    = (System.nanoTime() and 0xFFFFFFFFL)
         @Volatile private var serverSeq: Long = serverIsn + 1  // after SYN-ACK
+
         // Client→server direction
-        @Volatile private var clientSeq: Long = clientSeq + 1  // after SYN consumed
+        @Volatile private var clientSeq: Long = clientSeq + 1  // SYN consumes 1 seq
 
         private var sock: Socket? = null
         @Volatile private var closed = false
 
         /**
-         * Connect to the SOCKS5 proxy for this session and send SYN-ACK back to
-         * the client so the kernel completes the three-way handshake.
+         * Connect to destination.
+         *
+         * Direct mode (socksPort == 0): open a plain Socket to dstIp:dstPort,
+         * call protect() so it bypasses the VPN tun, and do the TCP handshake.
+         *
+         * SOCKS5 mode (socksPort > 0): open a plain Socket to 127.0.0.1:socksPort,
+         * call protect(), then do the SOCKS5 CONNECT handshake.
+         *
+         * Either way, complete the client's TCP handshake by sending SYN-ACK.
          */
         fun connect(socksPort: Int, vpn: VpnService) {
             val socket = Socket()
             sock = socket
+            // CRITICAL: protect() bypasses the VPN tun so we don't loop
             vpn.protect(socket)
 
-            socket.connect(InetSocketAddress("127.0.0.1", socksPort), 10_000)
-            socket.soTimeout = 0
+            if (socksPort > 0) {
+                // Route via SOCKS5 proxy
+                socket.connect(InetSocketAddress("127.0.0.1", socksPort), CONNECT_TIMEOUT_MS)
+                socket.soTimeout = 0
 
-            val sin  = socket.getInputStream()
-            val sout = socket.getOutputStream()
+                val sin  = socket.getInputStream()
+                val sout = socket.getOutputStream()
 
-            // SOCKS5 no-auth greeting
-            sout.write(byteArrayOf(0x05, 0x01, 0x00)); sout.flush()
-            val greet = ByteArray(2).also { readFully(sin, it) }
-            check(greet[1] == 0x00.toByte()) { "SOCKS5 auth not accepted" }
+                // SOCKS5 greeting — request no-auth
+                sout.write(byteArrayOf(0x05, 0x01, 0x00))
+                sout.flush()
+                val greet = ByteArray(2).also { readFully(sin, it) }
+                check(greet[1] == 0x00.toByte()) { "SOCKS5 auth not accepted: ${greet[1]}" }
 
-            // SOCKS5 CONNECT request
-            val addr = dstIp.address
-            sout.write(byteArrayOf(
-                0x05, 0x01, 0x00, 0x01,
-                addr[0], addr[1], addr[2], addr[3],
-                (dstPort shr 8).toByte(), (dstPort and 0xFF).toByte()
-            )); sout.flush()
+                // SOCKS5 CONNECT request (IPv4)
+                val addr = dstIp.address
+                sout.write(byteArrayOf(
+                    0x05, 0x01, 0x00, 0x01,
+                    addr[0], addr[1], addr[2], addr[3],
+                    (dstPort shr 8).toByte(), (dstPort and 0xFF).toByte()
+                ))
+                sout.flush()
 
-            val resp = ByteArray(10).also { readFully(sin, it) }
-            check(resp[1] == 0x00.toByte()) { "SOCKS5 CONNECT refused: ${resp[1]}" }
+                val resp = ByteArray(10).also { readFully(sin, it) }
+                check(resp[1] == 0x00.toByte()) {
+                    "SOCKS5 CONNECT refused, reply: ${resp[1].toInt() and 0xFF}"
+                }
+                Log.d(TAG, "SOCKS5→$dstIp:$dstPort established (src $srcIp:$srcPort)")
+            } else {
+                // Direct mode — connect protected socket straight to destination
+                socket.connect(InetSocketAddress(dstIp, dstPort), CONNECT_TIMEOUT_MS)
+                socket.soTimeout = 0
+                Log.d(TAG, "Direct→$dstIp:$dstPort established (src $srcIp:$srcPort)")
+            }
 
-            Log.d(TAG, "SOCKS5 open $dstIp:$dstPort (src $srcIp:$srcPort)")
-
-            // Send SYN-ACK back to the client to complete the handshake
+            // Complete the TCP three-way handshake by sending SYN-ACK to client
             sendTcpPacket(
-                flags   = TCP_SYN or TCP_ACK,
-                seqNum  = serverIsn,
-                ackNum  = clientSeq,
-                payload = null, payloadLen = 0
+                flags      = TCP_SYN or TCP_ACK,
+                seqNum     = serverIsn,
+                ackNum     = clientSeq,
+                payload    = null, payloadLen = 0
             )
-            // After SYN-ACK, server seq advances by 1 (SYN consumes a sequence number)
-            serverSeq = serverIsn + 1
         }
 
-        /** Relay inbound data: SOCKS5 proxy → tun → app. Blocks until connection ends. */
+        /** Relay inbound data: socket → tun → app. Blocks until connection ends. */
         fun relayInbound() {
             val sin = sock?.getInputStream() ?: return
-            val buf = ByteArray(4096)
+            val buf = ByteArray(8192)
             try {
                 while (!closed) {
                     val n = sin.read(buf)
@@ -326,6 +351,8 @@ class RnetVpnService : VpnService() {
                         payloadLen = n
                     )
                     serverSeq += n
+                    // Track bytes received (internet → app)
+                    RnetForegroundService.activeBytesIn += n
                 }
                 // Send FIN-ACK when server closes
                 if (!closed) {
@@ -336,21 +363,21 @@ class RnetVpnService : VpnService() {
                         payload = null, payloadLen = 0
                     )
                 }
-            } catch (_: Exception) {
-                // Connection closed normally
-            }
+            } catch (_: Exception) {}
         }
 
-        /** Forward outbound data from the app (via tun) to the SOCKS5 socket. */
+        /** Forward outbound data from the app (tun) to the real socket. */
         fun sendOutbound(buf: ByteArray, offset: Int, len: Int, seqNum: Long, ackNum: Long) {
             if (closed) return
-            clientSeq = seqNum + len   // advance expected client seq
+            clientSeq = seqNum + len
             try {
                 sock?.getOutputStream()?.let {
                     it.write(buf, offset, len)
                     it.flush()
                 }
-                // Send ACK back to client
+                // Track bytes sent (app → internet)
+                RnetForegroundService.activeBytesOut += len
+                // ACK back to client
                 sendTcpPacket(
                     flags   = TCP_ACK,
                     seqNum  = serverSeq,
@@ -358,16 +385,14 @@ class RnetVpnService : VpnService() {
                     payload = null, payloadLen = 0
                 )
             } catch (e: Exception) {
-                Log.d(TAG, "sendOutbound failed: ${e.message}")
+                Log.d(TAG, "sendOutbound error: ${e.message}")
                 close()
             }
         }
 
         fun sendFin() {
             if (closed) return
-            try {
-                sock?.close()
-            } catch (_: Exception) {}
+            try { sock?.close() } catch (_: Exception) {}
         }
 
         fun close() {
@@ -376,23 +401,19 @@ class RnetVpnService : VpnService() {
         }
 
         /**
-         * Craft an IPv4+TCP packet and write it to the tun fd.
-         * src = dstIp:dstPort (the remote server's perspective — response direction)
-         * dst = srcIp:srcPort (the local app)
+         * Craft an IPv4+TCP response packet and write to tun fd.
+         * Packet direction: dstIp:dstPort → srcIp:srcPort (server responding to client).
          */
         private fun sendTcpPacket(
-            flags: Int,
-            seqNum: Long,
-            ackNum: Long,
-            payload: ByteArray?,
-            payloadLen: Int
+            flags: Int, seqNum: Long, ackNum: Long,
+            payload: ByteArray?, payloadLen: Int
         ) {
             val ipHdrLen  = 20
             val tcpHdrLen = 20
             val totalLen  = ipHdrLen + tcpHdrLen + payloadLen
             val pkt = ByteArray(totalLen)
 
-            // IPv4 header (src=dstIp, dst=srcIp — response direction)
+            // IPv4 header (src=dstIp, dst=srcIp)
             pkt[0] = 0x45.toByte()
             pkt[1] = 0x00
             writeUShort(pkt, 2, totalLen)
@@ -400,33 +421,31 @@ class RnetVpnService : VpnService() {
             pkt[6] = 0x40; pkt[7] = 0x00   // DF flag
             pkt[8] = 64                     // TTL
             pkt[9] = 6                      // TCP
-            dstIp.address.copyInto(pkt, 12) // src = dstIp (server responding)
-            srcIp.address.copyInto(pkt, 16) // dst = srcIp (client)
+            dstIp.address.copyInto(pkt, 12) // src = dstIp
+            srcIp.address.copyInto(pkt, 16) // dst = srcIp
 
-            // TCP header (srcPort=dstPort, dstPort=srcPort — response direction)
+            // TCP header (srcPort=dstPort, dstPort=srcPort)
             val t = ipHdrLen
-            writeUShort(pkt, t,     dstPort)   // src port = server port
-            writeUShort(pkt, t + 2, srcPort)   // dst port = client port
+            writeUShort(pkt, t,     dstPort)
+            writeUShort(pkt, t + 2, srcPort)
             writeUInt  (pkt, t + 4, seqNum)
             writeUInt  (pkt, t + 8, ackNum)
-            pkt[t + 12] = 0x50.toByte()        // data offset = 5 (20 bytes)
+            pkt[t + 12] = 0x50.toByte()        // data offset = 5*4 = 20 bytes
             pkt[t + 13] = flags.toByte()
-            pkt[t + 14] = 0xFF.toByte()        // window high
-            pkt[t + 15] = 0xFF.toByte()        // window low
+            pkt[t + 14] = 0xFF.toByte()        // window size high byte
+            pkt[t + 15] = 0xFF.toByte()        // window size low byte
 
-            // Copy payload
             if (payload != null && payloadLen > 0) {
                 payload.copyInto(pkt, ipHdrLen + tcpHdrLen, 0, payloadLen)
             }
 
             // IP checksum
-            val ipCsum = checksum16(pkt, 0, ipHdrLen)
-            writeUShort(pkt, 10, ipCsum)
+            writeUShort(pkt, 10, checksum16(pkt, 0, ipHdrLen))
 
-            // TCP checksum (pseudo-header)
-            val tcpCsum = tcpChecksum(pkt, ipHdrLen, tcpHdrLen + payloadLen,
-                                       dstIp.address, srcIp.address)
-            writeUShort(pkt, t + 16, tcpCsum)
+            // TCP checksum (with pseudo-header)
+            writeUShort(pkt, t + 16,
+                tcpChecksum(pkt, ipHdrLen, tcpHdrLen + payloadLen,
+                    dstIp.address, srcIp.address))
 
             synchronized(tunOut) {
                 try { tunOut.write(pkt) } catch (_: Exception) {}
@@ -454,9 +473,10 @@ class RnetVpnService : VpnService() {
         writeUInt  (pkt, 28, ackNum)
         pkt[32] = 0x50.toByte()
         pkt[33] = (TCP_RST or TCP_ACK).toByte()
+        pkt[34] = 0xFF.toByte()
+        pkt[35] = 0xFF.toByte()
         writeUShort(pkt, 10, checksum16(pkt, 0, 20))
-        val tcsum = tcpChecksum(pkt, 20, 20, srcIp.address, dstIp.address)
-        writeUShort(pkt, 36, tcsum)
+        writeUShort(pkt, 36, tcpChecksum(pkt, 20, 20, srcIp.address, dstIp.address))
         synchronized(tunOut) {
             try { tunOut.write(pkt) } catch (_: Exception) {}
         }
@@ -515,7 +535,7 @@ class RnetVpnService : VpnService() {
         var off = 0
         while (off < buf.size) {
             val n = sin.read(buf, off, buf.size - off)
-            if (n < 0) throw java.io.EOFException("Stream ended after $off/${buf.size} bytes")
+            if (n < 0) throw java.io.EOFException("Stream ended prematurely at $off/${buf.size}")
             off += n
         }
     }
@@ -569,6 +589,7 @@ class RnetVpnService : VpnService() {
     }
 
     private fun updateNotification(status: String) {
-        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(status))
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIF_ID, buildNotification(status))
     }
 }

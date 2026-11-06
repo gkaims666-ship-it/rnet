@@ -23,15 +23,18 @@ import kotlinx.coroutines.launch
  * RnetForegroundService — FOREGROUND_SERVICE_DATA_SYNC service that owns the
  * transport engine and gateway lifecycle.
  *
- * Runs as a persistent foreground service with a visible notification so the
- * user is always aware the transport stack is active. The OS will not kill it
- * during Doze without the user explicitly force-stopping the app.
- *
  * Actions:
- *   ACTION_START          → start MultipathEngine + CellMonitor
- *   ACTION_STOP           → stop engine
- *   ACTION_GATEWAY_START  → start HotspotGateway (consent already verified by UI)
+ *   ACTION_START          → start VPN + engine
+ *   ACTION_STOP           → stop engine + VPN
+ *   ACTION_GATEWAY_START  → start HotspotGateway
  *   ACTION_GATEWAY_STOP   → stop gateway
+ *
+ * VPN startup sequence:
+ *   1. ACTION_START received → startEngine()
+ *   2. VPN interface started IMMEDIATELY in direct mode (no SOCKS5 needed)
+ *   3. If "Route via Resilient Core" is enabled AND Psiphon connects successfully,
+ *      restart the VPN in SOCKS5 mode on Psiphon's port (best-effort upgrade)
+ *   4. Engine traffic counters (bytes in/out) are exposed via activeBytesIn/Out
  */
 class RnetForegroundService : Service() {
 
@@ -44,14 +47,15 @@ class RnetForegroundService : Service() {
         private const val CHANNEL_ID    = "rnet_service_channel"
         private const val NOTIF_ID      = 1001
 
-        private const val DEFAULT_PORT  = 7777
-
         /**
          * The SOCKS5 port Psiphon is currently listening on.
-         * Set when Psiphon connects, cleared when it stops.
-         * Read by MainActivity to pass to RnetVpnService.
+         * 0 = not running (direct mode).
          */
         @Volatile var activeSocksPort: Int = 0
+
+        /** Bytes transferred through the VPN — updated by RnetVpnService. */
+        @Volatile var activeBytesIn:  Long = 0L
+        @Volatile var activeBytesOut: Long = 0L
     }
 
     private lateinit var cellMonitor: CellMonitor
@@ -94,107 +98,72 @@ class RnetForegroundService : Service() {
 
     private fun startEngine() {
         if (engineStarted) return
+        engineStarted = true
+        updateNotification()
 
-        // Session key: in production derived via HybridKeyExchange handshake
         val sessionKeyBytes = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
         val cipher = SessionCipher(sessionKeyBytes)
-
         engine = MultipathEngine(this, cipher, cellMonitor)
-        // Note: cellMonitor.start() is intentionally NOT called here.
-        // MainViewModel manages its own CellMonitor for UI telemetry.
-        // MultipathEngine reads from cellMonitor.flow for MTU adaptation
-        // but starting a second telephony listener would cause a crash.
 
+        // Step 1: Start VPN in direct mode IMMEDIATELY.
+        // This works without any external service or credentials.
+        // Traffic flows: app → tun fd → RnetVpnService → (protected socket) → internet
+        startVpnInterface(socksPort = 0)
+
+        // Step 2: If "Route via Resilient Core" is ON, also start Psiphon in background.
+        // If Psiphon connects, restart VPN in SOCKS5 mode for the upgrade.
+        // If Psiphon fails, the VPN keeps working in direct mode — no disruption.
         if (ServerPrefs.useResilientCore(this)) {
-            // User has opted in to Psiphon resilient routing.
-            // Start the Psiphon tunnel first; once connected, point the engine
-            // at the SOCKS5 proxy it exposes locally.
-            engineStarted = true          // mark started so the notification updates
-            updateNotification()
             serviceScope.launch {
                 try {
                     val psiphonTransport = PsiphonTransport(this@RnetForegroundService)
                     psiphon = psiphonTransport
-                    // start() blocks until the first Psiphon server is reachable
                     val proxyAddress = psiphonTransport.start()
-                    // proxyAddress = "socks5://127.0.0.1:<port>"
                     val port = proxyAddress.substringAfterLast(":").toIntOrNull() ?: 1080
-                    activeSocksPort = port   // publish for RnetVpnService to read
+                    activeSocksPort = port
+
+                    android.util.Log.i("RnetForegroundService",
+                        "Psiphon connected on port $port — upgrading VPN to SOCKS5 mode")
+
+                    // Stop the direct-mode VPN, restart with SOCKS5
+                    stopVpnInterface()
+                    startVpnInterface(socksPort = port)
+
+                    // Also connect MultipathEngine via SOCKS5 for multi-path UDP
+                    val relayHost = ServerPrefs.getHost(this@RnetForegroundService)
+                    val relayPort = ServerPrefs.getPort(this@RnetForegroundService)
                     engine.setUpstreamSocksProxy("127.0.0.1", port)
-                    // Connect to user relay if configured; otherwise the SOCKS proxy
-                    // itself is the exit (Psiphon handles the upstream path)
-                    val relayHost = ServerPrefs.getHost(this@RnetForegroundService)
-                    val relayPort = ServerPrefs.getPort(this@RnetForegroundService)
-                    if (relayHost.isNotBlank()) {
+                    if (relayHost.isNotBlank() && relayHost != "relay.example.com") {
                         engine.start(relayHost, relayPort)
-                    } else {
-                        // No private relay: Psiphon is the full transport stack
-                        engine.startSocksPassthrough("127.0.0.1", port)
                     }
-                    // Start the VPN interface now that SOCKS5 is ready
-                    startVpnInterface(activeSocksPort)
                 } catch (e: Exception) {
-                    android.util.Log.e("RnetForegroundService",
-                        "Psiphon start failed: ${e.message}")
-                    // Fall back to direct connection if Psiphon fails
-                    val relayHost = ServerPrefs.getHost(this@RnetForegroundService)
-                    val relayPort = ServerPrefs.getPort(this@RnetForegroundService)
-                    if (relayHost.isNotBlank()) engine.start(relayHost, relayPort)
+                    android.util.Log.w("RnetForegroundService",
+                        "Psiphon unavailable (${e.message}) — staying in direct mode")
+                    // VPN already running in direct mode; nothing to do
                 }
             }
         } else {
-            // Standard mode: connect to user-configured relay.
-            // If relay host is blank or still the default placeholder, bypass
-            // private relay entirely and fall through to Psiphon as primary upstream.
+            // Standard mode: use relay if configured; otherwise VPN handles routing directly
             val relayHost = ServerPrefs.getHost(this)
             val relayPort = ServerPrefs.getPort(this)
-            val isBlankOrPlaceholder = relayHost.isBlank() ||
-                relayHost == "relay.example.com" ||
-                relayHost.endsWith(".example.com")
-
-            if (isBlankOrPlaceholder) {
-                // No relay configured — start Psiphon immediately as primary upstream
-                engineStarted = true
-                updateNotification()
-                serviceScope.launch {
-                    try {
-                        val psiphonTransport = PsiphonTransport(this@RnetForegroundService)
-                        psiphon = psiphonTransport
-                        val proxyAddress = psiphonTransport.start()
-                        val port = proxyAddress.substringAfterLast(":").toIntOrNull() ?: 1080
-                        activeSocksPort = port   // publish for RnetVpnService to read
-                        engine.setUpstreamSocksProxy("127.0.0.1", port)
-                        engine.startSocksPassthrough("127.0.0.1", port)
-                        // Start the VPN interface now that SOCKS5 is ready
-                        startVpnInterface(port)
-                    } catch (e: Exception) {
-                        android.util.Log.e("RnetForegroundService",
-                            "Psiphon fallback start failed: ${e.message}")
-                    }
-                }
-            } else {
+            if (relayHost.isNotBlank() &&
+                relayHost != "relay.example.com" &&
+                !relayHost.endsWith(".example.com")) {
                 engine.start(relayHost, relayPort)
-                engineStarted = true
-                updateNotification()
             }
         }
     }
 
     /**
-     * Starts RnetVpnService with the given SOCKS5 port.
+     * Start RnetVpnService.
      *
-     * Called from a background coroutine after Psiphon has connected (20–60 s after
-     * onStartCommand). We MUST use startService(), NOT startForegroundService(), here.
+     * socksPort == 0  → direct mode (VPN routes straight to internet via protected sockets)
+     * socksPort > 0   → SOCKS5 mode (VPN routes through the given proxy port)
      *
-     * On Android 14+, startForegroundService() throws ForegroundServiceStartNotAllowedException
-     * when called from a background context — i.e. any call that is not synchronously
-     * on the main thread within a few seconds of a user interaction or the service's own
-     * onStartCommand. Because this method is invoked from a coroutine running on Dispatchers.IO
-     * well after onStartCommand has returned, startForegroundService() would crash.
-     *
-     * RnetVpnService is a VpnService subclass; the system promotes it to a foreground service
-     * automatically when it calls startForeground() inside its own onStartCommand(), so there is
-     * no need for the caller to use startForegroundService().
+     * Uses startService() (not startForegroundService()) because this may be called
+     * from a background coroutine after the initial onStartCommand() window has passed.
+     * VpnService sub-classes are promoted to foreground automatically by the system
+     * when they call startForeground() inside their own onStartCommand().
      */
     private fun startVpnInterface(socksPort: Int) {
         try {
@@ -202,22 +171,29 @@ class RnetForegroundService : Service() {
                 action = RnetVpnService.ACTION_START
                 putExtra(RnetVpnService.EXTRA_SOCKS_PORT, socksPort)
             }
-            startService(intent)   // NOT startForegroundService — see KDoc above
+            startService(intent)
+            android.util.Log.i("RnetForegroundService",
+                "VPN started (${if (socksPort > 0) "SOCKS5 :$socksPort" else "direct"})")
         } catch (e: Exception) {
             android.util.Log.w("RnetForegroundService",
                 "Could not start VPN interface: ${e.message}")
         }
     }
 
-    private fun stopEngine() {
-        if (!engineStarted) return
-        // Stop VPN interface first
+    private fun stopVpnInterface() {
         try {
             startService(Intent(this, RnetVpnService::class.java).apply {
                 action = RnetVpnService.ACTION_STOP
             })
         } catch (_: Exception) {}
+    }
+
+    private fun stopEngine() {
+        if (!engineStarted) return
+        stopVpnInterface()
         activeSocksPort = 0
+        activeBytesIn   = 0
+        activeBytesOut  = 0
         if (::engine.isInitialized) {
             runCatching { engine.stop() }
         }
@@ -235,7 +211,7 @@ class RnetForegroundService : Service() {
         if (!engineStarted) startEngine()
 
         val gw = HotspotGateway(this, engine)
-        gw.grantConsent()   // consent verified by ConsentActivity before this action fires
+        gw.grantConsent()
         gw.start()
         gateway = gw
         gatewayStarted = true
@@ -285,7 +261,7 @@ class RnetForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.notif_title))
             .setContentText(statusText)
-            .setSmallIcon(android.R.drawable.ic_menu_share)   // replace with branded icon
+            .setSmallIcon(android.R.drawable.ic_menu_share)
             .setContentIntent(tapIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel,
                        getString(R.string.notif_stop), stopIntent)

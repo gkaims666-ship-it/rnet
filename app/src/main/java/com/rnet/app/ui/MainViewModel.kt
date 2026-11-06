@@ -10,6 +10,7 @@ import com.rnet.app.prefs.ServerPrefs
 import com.rnet.app.service.RnetForegroundService
 import com.rnet.app.transport.CellMonitor
 import com.rnet.app.transport.CellSnapshot
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -44,6 +45,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         cellMonitor.start()
         viewModelScope.launch {
             cellMonitor.flow.collect { snap -> updateCellMetrics(snap) }
+        }
+        // Poll VPN byte counters every second while engine is active
+        viewModelScope.launch {
+            while (true) {
+                delay(1_000)
+                val bytesIn  = RnetForegroundService.activeBytesIn
+                val bytesOut = RnetForegroundService.activeBytesOut
+                if (bytesIn != _ui.value.totalBytesIn || bytesOut != _ui.value.totalBytesOut) {
+                    _ui.update { it.copy(totalBytesIn = bytesIn, totalBytesOut = bytesOut) }
+                }
+            }
         }
     }
 
