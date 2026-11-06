@@ -2,6 +2,7 @@ package com.rnet.app.service
 
 import android.app.*
 import android.content.Intent
+import android.net.*
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -18,7 +19,6 @@ import java.net.*
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 
 /**
  * RnetForegroundService — combined VPN + foreground service.
@@ -89,6 +89,15 @@ class RnetForegroundService : VpnService() {
         @Volatile var exitRegion         = PREFERRED_REGION
         @Volatile var pendingRegion      = PREFERRED_REGION
         @Volatile var routeCacheSize     = 0   // how many destinations are cached
+        @Volatile var pooledSockets      = 0   // pre-warmed sockets ready
+        // Apps excluded from VPN (split tunneling) — system apps that don't need circumvention
+        val SPLIT_TUNNEL_PACKAGES = setOf(
+            "com.android.vending",         // Play Store — keep fast
+            "com.google.android.gms",      // Google Play Services
+            "com.google.android.gsf",      // Google Services Framework
+            "com.android.providers.downloads",
+            "com.sec.android.daemonapp"    // Samsung system daemon
+        )
     }
 
     // ── Thread pool ─────────────────────────────────────────────────────────
@@ -113,12 +122,19 @@ class RnetForegroundService : VpnService() {
     @Volatile private var writerThread: Thread? = null
     @Volatile private var readerThread: Thread? = null
 
-    // Smart routing components
+    // Smart routing + supporting components
     private var tunnelPool: TunnelPool? = null
     private var smartRouter: SmartRouter? = null
 
     private var cellMon: CellMonitor?     = null
     private var gateway: HotspotGateway? = null
+
+    // Network change listener — zero-drop handoff on WiFi↔cellular switch
+    private val connectivityManager by lazy {
+        getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+    }
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var lastNetwork: Network? = null
 
     // ── Android lifecycle ────────────────────────────────────────────────────
     override fun onCreate() { super.onCreate(); makeChan(); cellMon = CellMonitor(this) }
@@ -155,10 +171,16 @@ class RnetForegroundService : VpnService() {
         proxyLabel = "Starting…"
         cellMon!!.start()
 
-        // Build the tunnel pool and smart router
+        // Load persistent caches from disk
+        DnsCache.load(applicationContext)
+
+        // Build the tunnel pool and smart router (with context for persistence)
         val tp = TunnelPool(applicationContext) { s -> protect(s) }
         tunnelPool = tp
-        smartRouter = SmartRouter(tp, region, this)
+        smartRouter = SmartRouter(tp, region, this, applicationContext)
+
+        // Register network change callback for seamless handoff
+        registerNetworkCallback()
 
         svcScope.launch { warmupTunnels(region) }
         svcScope.launch { vpnLoop() }
@@ -175,13 +197,64 @@ class RnetForegroundService : VpnService() {
         readerThread?.interrupt(); writerThread?.interrupt()
         writeQueue.clear(); writeQueue.offer(ByteArray(0))
         try { tun?.close() } catch (_: Exception) {}; tun = null
+        // Save caches to disk before stopping
+        smartRouter?.connPool?.stopAll()
+        smartRouter?.saveTodisk()
+        DnsCache.save(applicationContext)
         tunnelPool?.stopAll(); tunnelPool = null; smartRouter = null
+        unregisterNetworkCallback()
         LocationMasker.stop(applicationContext)
         cellMon?.stop()
         activeSocksPort = 0; activeBytesIn.set(0); activeBytesOut.set(0)
-        activeSessionCount.set(0); routeCacheSize = 0
+        activeSessionCount.set(0); routeCacheSize = 0; pooledSockets = 0
         postNotif()
         if (!gwStarted) stopSelf()
+    }
+
+    // ── Network change handling (seamless WiFi↔cellular handoff) ─────────────
+    private fun registerNetworkCallback() {
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val prev = lastNetwork
+                lastNetwork = network
+                if (prev != null && prev != network && engineStarted) {
+                    Log.i(TAG, "Network switched — rebuilding VPN tun")
+                    // Restart VPN loop on new network without full stop/start
+                    svcScope.launch { rebuildTun() }
+                }
+            }
+            override fun onLost(network: Network) {
+                if (network == lastNetwork) lastNetwork = null
+            }
+        }
+        try {
+            val req = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            connectivityManager.registerNetworkCallback(req, cb)
+            networkCallback = cb
+        } catch (e: Exception) {
+            Log.w(TAG, "NetworkCallback registration failed: ${e.message}")
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        networkCallback?.let {
+            try { connectivityManager.unregisterNetworkCallback(it) } catch (_: Exception) {}
+            networkCallback = null
+        }
+    }
+
+    /** Rebuild the tun interface on network switch — keeps sessions alive. */
+    private suspend fun rebuildTun() = withContext(Dispatchers.IO) {
+        if (!engineStarted) return@withContext
+        Log.i(TAG, "Rebuilding tun after network change")
+        // Interrupt reader — it will exit its loop, vpnLoop will restart
+        readerThread?.interrupt()
+        // Brief wait for reader to exit
+        delay(300)
+        // vpnLoop detects alive=true and loops back to re-establish
+        // (reader exits on IOException, vpnLoop restarts if alive still true)
     }
 
     // ── Tunnel warmup ────────────────────────────────────────────────────────
@@ -262,23 +335,45 @@ class RnetForegroundService : VpnService() {
 
             // Update UI stats
             routeCacheSize = smartRouter?.routeCacheSize ?: 0
-            proxyLabel = "Smart·${exitRegion} (${routeCacheSize}✓)"
+            pooledSockets  = smartRouter?.connPool?.totalPooled() ?: 0
+            proxyLabel = "Smart·${exitRegion} (${routeCacheSize}✓ ${pooledSockets}⚡)"
             postNotif()
         }
     }
 
     // ── Maintenance loop ──────────────────────────────────────────────────────
     private suspend fun maintenanceLoop() = withContext(Dispatchers.IO) {
+        var saveCounter = 0
         while (engineStarted) {
             delay(IDLE_EVICT_INTERVAL_MS)
             tunnelPool?.evictIdle()
             smartRouter?.evictExpired()
+            smartRouter?.connPool?.evictIdle()
+            DnsCache.evictExpired()
             routeCacheSize = smartRouter?.routeCacheSize ?: 0
+            pooledSockets  = smartRouter?.connPool?.totalPooled() ?: 0
+            // Save caches to disk every 10 minutes
+            if (++saveCounter >= 5) {
+                saveCounter = 0
+                smartRouter?.saveTodisk()
+                DnsCache.save(applicationContext)
+            }
         }
     }
 
-    // ── VPN loop ─────────────────────────────────────────────────────────────
+    // ── VPN loop — auto-restarts on network change ────────────────────────────
     private suspend fun vpnLoop() {
+        // Outer loop: re-establish tun after network switch
+        while (engineStarted) {
+            val tunStarted = runCatching { buildAndRunTun() }.isSuccess
+            if (!engineStarted) break
+            if (!tunStarted) {
+                delay(1000)  // back-off before retry
+            }
+        }
+    }
+
+    private suspend fun buildAndRunTun() {
         try {
             val builder = Builder()
                 .setSession("RNET")
@@ -288,23 +383,36 @@ class RnetForegroundService : VpnService() {
                 .addDnsServer("1.1.1.1")
                 .addDnsServer("8.8.8.8")
                 .setBlocking(true)
-                .also { try { it.addDisallowedApplication(packageName) } catch (_: Exception) {} }
+
+            // Always exclude self to avoid routing loops
+            try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
+
+            // Split tunneling: exclude system apps that don't need circumvention
+            for (pkg in SPLIT_TUNNEL_PACKAGES) {
+                try { builder.addDisallowedApplication(pkg) } catch (_: Exception) {}
+            }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
 
-            tun = builder.establish() ?: run {
+            val newTun = builder.establish() ?: run {
                 Log.e(TAG, "establish() = null — no VPN permission")
-                engineStarted = false; connectionPhase = ConnectionPhase.IDLE; postNotif(); return
+                engineStarted = false; connectionPhase = ConnectionPhase.IDLE; postNotif()
+                return
             }
+
+            // Swap tun atomically — close old one after establishing new
+            val oldTun = tun
+            tun = newTun
+            oldTun?.let { runCatching { it.close() } }
 
             alive = true
             Log.i(TAG, "VPN tun up ✓")
 
-            val fd  = tun!!.fileDescriptor
+            val fd  = newTun.fileDescriptor
             val inp = FileInputStream(fd)
             val out = FileOutputStream(fd)
 
-            // Writer thread: drains writeQueue → tun fd
+            // Writer thread
             val writer = Thread({
                 while (alive || !writeQueue.isEmpty()) {
                     val pkt = writeQueue.poll(200, TimeUnit.MILLISECONDS) ?: continue
@@ -315,28 +423,29 @@ class RnetForegroundService : VpnService() {
             writer.isDaemon = true; writer.start()
             writerThread = writer
 
-            // Reader thread: reads tun fd → dispatch
-            // Audit fix #1: copy slice to new array before dispatching to pool thread
+            // Reader thread — audit fix #1: copy buffer before dispatch
             val reader = Thread({
                 val buf = ByteArray(READ_BUF)
                 while (alive) {
                     val n = try { inp.read(buf) } catch (_: Exception) { -1 }
                     if (n <= 0) { if (alive) continue else break }
-                    val pkt = buf.copyOf(n)   // ← audit fix #1: safe copy
+                    val pkt = buf.copyOf(n)
                     try { handlePkt(pkt, n) } catch (_: Exception) {}
                 }
             }, "rnet-reader")
             reader.isDaemon = true; reader.start()
             readerThread = reader
 
-            // Keep coroutine alive until stopped (audit fix #7: interruptible)
+            // audit fix #7: interruptible join
             withContext(Dispatchers.IO) { reader.join() }
+
+            // Reader exited — if still alive it means network changed, loop will rebuild
+            if (engineStarted) Log.i(TAG, "Reader exited — will rebuild tun")
         } catch (e: kotlinx.coroutines.CancellationException) {
-            // normal coroutine cancellation
+            throw e  // propagate coroutine cancellation
         } catch (e: Exception) {
-            Log.e(TAG, "VPN loop crashed: ${e.message}", e)
+            Log.e(TAG, "VPN loop error: ${e.message}", e)
         } finally {
-            alive = false
             runCatching { tun?.close() }; tun = null
         }
     }
@@ -407,15 +516,103 @@ class RnetForegroundService : VpnService() {
     }
 
     private fun relayUdp(sIP: InetAddress, sPort: Int, dIP: InetAddress, dPort: Int, pay: ByteArray) {
-        // Audit fix #8: DoH parallel probing done inside DoHResolver
         val resp: ByteArray? = if (dPort == 53) {
-            DoHResolver.resolveParallel(pay)
-                ?: DoHResolver.resolveUdp(pay) { sock -> protect(sock) }
+            // DNS: check cache first, then parallel DoH (audit fix #8), then UDP fallback
+            val cached = tryResolveDnsFromCache(pay)
+            cached ?: DoHResolver.resolveParallel(pay)?.also { storeDnsToCache(pay, it) }
+                    ?: DoHResolver.resolveUdp(pay) { sock -> protect(sock) }
         } else {
             relayUdpDirect(dIP, dPort, pay)
         }
         if (resp == null) return
         writeUdpResponse(sIP, sPort, dIP, dPort, resp)
+    }
+
+    /**
+     * Extract the hostname from a DNS query and return a synthesized response
+     * if the IP is in our DnsCache. Returns null if not cached or parse fails.
+     */
+    private fun tryResolveDnsFromCache(query: ByteArray): ByteArray? {
+        return try {
+            if (query.size < 12) return null
+            val qdCount = ((query[4].toInt() and 0xFF) shl 8) or (query[5].toInt() and 0xFF)
+            if (qdCount == 0) return null
+            // Parse first question: skip header (12 bytes), read QNAME labels
+            var pos = 12
+            val sb = StringBuilder()
+            while (pos < query.size) {
+                val len = query[pos++].toInt() and 0xFF
+                if (len == 0) break
+                if (sb.isNotEmpty()) sb.append('.')
+                if (pos + len > query.size) return null
+                sb.append(String(query, pos, len, Charsets.US_ASCII))
+                pos += len
+            }
+            val host = sb.toString().lowercase()
+            if (host.isEmpty()) return null
+            val ip = DnsCache.get(host) ?: return null
+            buildDnsResponse(query, ip)
+        } catch (_: Exception) { null }
+    }
+
+    /** Cache the resolved IP from a DoH response back to DnsCache. */
+    private fun storeDnsToCache(query: ByteArray, response: ByteArray) {
+        try {
+            if (response.size < 12) return
+            val anCount = ((response[6].toInt() and 0xFF) shl 8) or (response[7].toInt() and 0xFF)
+            if (anCount == 0) return
+            // Parse question to get hostname, then find first A record in answer
+            var pos = 12
+            val sb = StringBuilder()
+            while (pos < response.size) {
+                val len = response[pos++].toInt() and 0xFF
+                if (len == 0) break
+                if (sb.isNotEmpty()) sb.append('.')
+                if (pos + len > response.size) return
+                sb.append(String(response, pos, len, Charsets.US_ASCII))
+                pos += len
+            }
+            val host = sb.toString().lowercase()
+            if (host.isEmpty()) return
+            pos += 4 // skip QTYPE + QCLASS
+            // Find A record in answers
+            repeat(anCount) {
+                if (pos + 10 > response.size) return
+                // Skip name (may be pointer 0xC0 xx or labels)
+                if (response[pos].toInt() and 0xC0 == 0xC0) pos += 2
+                else { while (pos < response.size && response[pos] != 0.toByte()) pos++; pos++ }
+                if (pos + 10 > response.size) return
+                val type  = ((response[pos].toInt() and 0xFF) shl 8) or (response[pos+1].toInt() and 0xFF)
+                val rdLen = ((response[pos+8].toInt() and 0xFF) shl 8) or (response[pos+9].toInt() and 0xFF)
+                pos += 10
+                if (type == 1 && rdLen == 4 && pos + 4 <= response.size) {
+                    val ipBytes = response.copyOfRange(pos, pos + 4)
+                    val addr = InetAddress.getByAddress(ipBytes)
+                    DnsCache.put(host, addr)
+                }
+                pos += rdLen
+            }
+        } catch (_: Exception) {}
+    }
+
+    /** Build a minimal DNS A-record response from a cached IP. */
+    private fun buildDnsResponse(query: ByteArray, ip: InetAddress): ByteArray? {
+        if (ip.address.size != 4) return null  // IPv4 only
+        val resp = query.copyOf(query.size + 16)
+        // Set QR=1 (response), AA=1, RA=1 in flags
+        resp[2] = 0x81.toByte(); resp[3] = 0x80.toByte()
+        // ANCOUNT = 1
+        resp[6] = 0x00; resp[7] = 0x01
+        // Append answer: name ptr (0xC00C), TYPE A, CLASS IN, TTL 300, RDLENGTH 4, IP
+        val answer = byteArrayOf(
+            0xC0.toByte(), 0x0C,          // name pointer to offset 12
+            0x00, 0x01,                    // TYPE A
+            0x00, 0x01,                    // CLASS IN
+            0x00, 0x00, 0x01, 0x2C,       // TTL 300
+            0x00, 0x04,                    // RDLENGTH 4
+            ip.address[0], ip.address[1], ip.address[2], ip.address[3]
+        )
+        return query.copyOf(query.size) + answer
     }
 
     private fun relayUdpDirect(dIP: InetAddress, dPort: Int, pay: ByteArray): ByteArray? {
@@ -458,7 +655,7 @@ class RnetForegroundService : VpnService() {
         @Volatile var closed = false
 
         fun run() {
-            // SmartRouter handles all routing: preferred → fallback → direct
+            // SmartRouter: pre-warmed pool → cache → probe → fallback → direct
             val s = smartRouter?.connect(dIP, dPort) ?: run {
                 sendTcp(dIP, dPort, sIP, sPort, 0, cAck, RST or ACK, null, 0); return
             }

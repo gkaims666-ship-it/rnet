@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.rnet.app.gateway.HotspotGateway
 import com.rnet.app.prefs.ServerPrefs
 import com.rnet.app.service.ConnectionPhase
+import com.rnet.app.service.DnsCache
 import com.rnet.app.service.RnetForegroundService
 import com.rnet.app.transport.CellMonitor
 import com.rnet.app.transport.CellSnapshot
@@ -30,9 +31,12 @@ data class UiState(
     val errorMessage: String?       = null,
     // New fields
     val activeSessionCount: Int     = 0,        // live TCP sessions through the VPN
-    val proxyLabel: String          = "—",      // "Psiphon·NL" / "Direct" / "Reconnecting…"
+    val proxyLabel: String          = "—",      // "Smart·IS (12✓ 3⚡)" etc.
     val connectionPhase: ConnectionPhase = ConnectionPhase.IDLE,
-    val exitRegion: String          = ""        // Psiphon exit country code e.g. "NL"
+    val exitRegion: String          = "",       // current exit country code e.g. "IS"
+    val routeCacheSize: Int         = 0,        // cached routes (destinations with known fast exit)
+    val pooledSockets: Int          = 0,        // pre-warmed sockets ready
+    val dnsCacheSize: Int           = 0         // DNS entries in memory
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -69,7 +73,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     activeSessionCount = sessions,
                     proxyLabel         = proxy,
                     connectionPhase    = phase,
-                    exitRegion         = region
+                    exitRegion         = region,
+                    routeCacheSize     = RnetForegroundService.routeCacheSize,
+                    pooledSockets      = RnetForegroundService.pooledSockets,
+                    dnsCacheSize       = DnsCache.size()
                 ) }
             }
         }

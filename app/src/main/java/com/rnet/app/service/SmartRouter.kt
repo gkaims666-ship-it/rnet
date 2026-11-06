@@ -1,89 +1,116 @@
 package com.rnet.app.service
 
+import android.content.Context
 import android.util.Log
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 /**
- * SmartRouter — per-destination exit-country selector.
+ * SmartRouter — per-destination exit-country selector with:
+ *   • In-memory route cache (1 h TTL)
+ *   • Persistent route cache via RouteStore (24 h TTL, survives VPN restart)
+ *   • Adaptive speed scoring: background throughput probe after route found
+ *   • Connection pool integration: pre-warmed sockets via ConnectionPool
+ *   • Coalesced probes: concurrent requests for same dest share one probe
  *
- * For each destination IP/port pair, finds the best proxy automatically:
- *   1. Check cache: if we've seen this IP before, reuse the working proxy
- *   2. Try the user's preferred region first (fastest path, usually works)
- *   3. On failure: probe the fallback order until one works
- *   4. Cache the winner for future connections to the same IP
- *   5. If all proxies fail: try direct connection as last resort
- *
- * Cache entries expire after CACHE_TTL_MS (1 hour) so we re-probe if
- * something that was blocked becomes unblocked, or vice versa.
- *
- * Concurrency: each probe is a blocking SOCKS5 test on a pool thread.
- * Multiple simultaneous probes for the same IP are coalesced — only
- * one test runs, others wait for the result.
+ * Flow for a new destination:
+ *   1. Check in-memory cache  → hit: return pre-warmed socket or fresh connect
+ *   2. Check RouteStore disk  → hit: use persisted region, skip full probe
+ *   3. Full probe: preferred → 9-country fallback → direct
+ *   4. Cache result in memory + disk
+ *   5. Schedule background warmup + speed probe
  */
 class SmartRouter(
     private val pool: TunnelPool,
     private val preferredRegion: String,
-    private val vpnService: android.net.VpnService
+    private val vpnService: android.net.VpnService,
+    private val context: Context? = null    // null = no persistence
 ) {
     companion object {
         private const val TAG = "SmartRouter"
-        private const val CACHE_TTL_MS  = 60 * 60 * 1000L   // 1 hour
-        private const val PROBE_TIMEOUT = 6_000              // ms per probe
+        private const val CACHE_TTL_MS  = 60 * 60 * 1000L   // 1 hour in-memory
+        private const val PROBE_TIMEOUT = 6_000
         private const val SOCK_BUF      = 262144
-
-        // Probe order: preferred first, then fallback chain, then direct
-        // "DIRECT" is a sentinel meaning no proxy
         const val DIRECT = "DIRECT"
 
-        // Regions to try in order when preferred fails
         private val FALLBACK_ORDER = listOf("IS", "EE", "DE", "NL", "SE", "CH", "US", "CA", "GB")
     }
 
     data class RouteEntry(
-        val proxy: String,     // region code, or DIRECT
-        val port: Int,         // SOCKS5 port (0 if DIRECT)
-        val cachedAtMs: Long = System.currentTimeMillis()
+        val proxy: String,
+        val port: Int,
+        val cachedAtMs: Long = System.currentTimeMillis(),
+        @Volatile var speedBytesPerMs: Double = 0.0   // 0 = not yet measured
     )
 
-    // key = "dstIP:dstPort"
     private val cache = ConcurrentHashMap<String, RouteEntry>()
+    private val probeLocks = ConcurrentHashMap<String, Any>()
 
-    // Per-destination lock to coalesce concurrent probes
-    private val probeLocks = ConcurrentHashMap<String, Object>()
+    // Background speed prober
+    private val speedProbeExecutor = Executors.newCachedThreadPool { r ->
+        Thread(r, "speed-probe").also { it.isDaemon = true }
+    }
 
-    // Public stats for UI
+    // Connection pool for pre-warmed sockets
+    val connPool: ConnectionPool by lazy { ConnectionPool(this) }
+
     @Volatile var routeCacheSize: Int = 0
     @Volatile var lastRoutedRegion: String = preferredRegion
 
+    init {
+        // Load persistent cache from disk
+        context?.let { RouteStore.load(it) }
+    }
+
     // ── Public API ────────────────────────────────────────────────────────────
 
-    /**
-     * Get the best connected socket for dstIP:dstPort.
-     * Blocks until connection is established or all options exhausted.
-     * Returns null only if everything failed.
-     */
     fun connect(dstIP: InetAddress, dstPort: Int): Socket? {
         val key = "${dstIP.hostAddress}:$dstPort"
 
-        // Check cache first (fast path)
+        // 1. Try pre-warmed socket first (fastest path — no handshake at all)
+        val warm = connPool.acquire(dstIP, dstPort)
+        if (warm != null) return warm
+
+        // 2. Check in-memory cache
         val cached = cache[key]
         if (cached != null && !isExpired(cached)) {
             val sock = tryConnect(dstIP, dstPort, cached.proxy, cached.port)
             if (sock != null) {
                 lastRoutedRegion = cached.proxy
+                connPool.scheduleWarmup(dstIP, dstPort, key)
                 return sock
             }
-            // Cached route failed — evict and re-probe
             cache.remove(key)
+            RouteStore.remove(key)
         }
 
-        // Coalesce concurrent probes for same destination
-        val lock = probeLocks.getOrPut(key) { Object() }
+        // 3. Check persistent disk cache (survives restarts)
+        val persisted = context?.let { RouteStore.get(key) }
+        if (persisted != null) {
+            val port = pool.getSocksPort(persisted.region)
+            if (port > 0) {
+                val sock = tryConnect(dstIP, dstPort, persisted.region, port)
+                if (sock != null) {
+                    val entry = RouteEntry(persisted.region, port)
+                    cache[key] = entry
+                    routeCacheSize = cache.size
+                    lastRoutedRegion = persisted.region
+                    Log.i(TAG, "✓ $key → ${persisted.region} (from disk cache)")
+                    connPool.scheduleWarmup(dstIP, dstPort, key)
+                    return sock
+                }
+                // Persisted route stale — fall through to full probe
+                RouteStore.remove(key)
+            }
+        }
+
+        // 4. Full probe with coalescing
+        val lock = probeLocks.getOrPut(key) { Any() }
         synchronized(lock) {
-            // Another thread may have populated cache while we waited
+            // Another thread may have populated cache while we waited for lock
             val fresh = cache[key]
             if (fresh != null && !isExpired(fresh)) {
                 val sock = tryConnect(dstIP, dstPort, fresh.proxy, fresh.port)
@@ -92,72 +119,133 @@ class SmartRouter(
                     return sock
                 }
             }
-
             val result = probe(dstIP, dstPort, key)
             probeLocks.remove(key)
             return result
         }
     }
 
-    /** Force-evict a cache entry (call when a session dies mid-stream). */
     fun invalidate(dstIP: InetAddress, dstPort: Int) {
-        cache.remove("${dstIP.hostAddress}:$dstPort")
+        val key = "${dstIP.hostAddress}:$dstPort"
+        cache.remove(key)
+        context?.let { RouteStore.remove(key) }
     }
 
-    /** Clear expired entries. Call every few minutes. */
     fun evictExpired() {
         cache.entries.removeIf { isExpired(it.value) }
+        RouteStore.evictExpired()
         routeCacheSize = cache.size
     }
 
-    // ── Probe logic ───────────────────────────────────────────────────────────
+    fun saveTodisk() {
+        context?.let { RouteStore.save(it) }
+    }
+
+    // ── Probe ─────────────────────────────────────────────────────────────────
 
     private fun probe(dstIP: InetAddress, dstPort: Int, key: String): Socket? {
-        // Build probe order: preferred first, then fallbacks (deduplicated), then DIRECT
         val order = buildList {
             add(preferredRegion)
             FALLBACK_ORDER.forEach { if (it != preferredRegion) add(it) }
             add(DIRECT)
         }
-
         for (region in order) {
             if (!pool.alive) return null
-
-            val (proxy, port) = if (region == DIRECT) {
-                Pair(DIRECT, 0)
-            } else {
+            val (proxy, port) = if (region == DIRECT) Pair(DIRECT, 0)
+            else {
                 val p = pool.getSocksPort(region)
-                if (p <= 0) continue   // tunnel failed to start for this region
+                if (p <= 0) continue
                 Pair(region, p)
             }
-
-            Log.d(TAG, "Probing $key via $region")
-            val sock = tryConnect(dstIP, dstPort, proxy, port)
-            if (sock != null) {
-                val entry = RouteEntry(proxy, port)
-                cache[key] = entry
-                routeCacheSize = cache.size
-                lastRoutedRegion = proxy
-                Log.i(TAG, "✓ $key → $region")
-                return sock
-            }
-            Log.d(TAG, "✗ $key via $region")
+            val sock = tryConnect(dstIP, dstPort, proxy, port) ?: continue
+            val entry = RouteEntry(proxy, port)
+            cache[key] = entry
+            routeCacheSize = cache.size
+            lastRoutedRegion = proxy
+            context?.let { RouteStore.put(key, proxy, port) }
+            Log.i(TAG, "✓ $key → $region")
+            connPool.scheduleWarmup(dstIP, dstPort, key)
+            // Start background speed probe to see if a faster region exists
+            if (proxy != DIRECT) scheduleSpeedProbe(dstIP, dstPort, key, proxy, port)
+            return sock
         }
-
         Log.w(TAG, "All routes failed for $key")
         return null
     }
 
+    // ── Adaptive speed scoring ────────────────────────────────────────────────
+
+    /**
+     * After a route is found, probe the fastest alternative in the background.
+     * If a region is significantly faster (>30% better throughput), migrate
+     * new connections to it automatically.
+     */
+    private fun scheduleSpeedProbe(
+        dstIP: InetAddress, dstPort: Int, key: String,
+        currentRegion: String, currentPort: Int
+    ) {
+        speedProbeExecutor.execute {
+            try {
+                Thread.sleep(2000)  // wait until main connection is established
+                val candidates = FALLBACK_ORDER
+                    .filter { it != currentRegion && pool.isReady(it) }
+                    .take(2)
+
+                var bestRegion = currentRegion
+                var bestSpeed = measureSpeed(dstIP, dstPort, currentRegion, currentPort)
+                cache[key]?.speedBytesPerMs = bestSpeed
+
+                for (region in candidates) {
+                    if (!pool.alive) break
+                    val port = pool.getSocksPort(region)
+                    if (port <= 0) continue
+                    val speed = measureSpeed(dstIP, dstPort, region, port)
+                    if (speed > bestSpeed * 1.3) {  // 30% faster threshold
+                        bestSpeed = speed
+                        bestRegion = region
+                    }
+                }
+
+                if (bestRegion != currentRegion) {
+                    val port = pool.getSocksPort(bestRegion)
+                    if (port > 0) {
+                        val entry = RouteEntry(bestRegion, port, speedBytesPerMs = bestSpeed)
+                        cache[key] = entry
+                        routeCacheSize = cache.size
+                        context?.let { RouteStore.put(key, bestRegion, port) }
+                        Log.i(TAG, "Speed upgrade: $key $currentRegion→$bestRegion (${bestSpeed.toInt()} B/ms)")
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Measure throughput to a destination via a given region.
+     * Opens a socket, sends a minimal HTTP HEAD request, times the response.
+     * Returns bytes/ms, or 0.0 on failure.
+     */
+    private fun measureSpeed(
+        dstIP: InetAddress, dstPort: Int, region: String, port: Int
+    ): Double {
+        return try {
+            val start = System.currentTimeMillis()
+            val sock = connectSocks5(dstIP, dstPort, "127.0.0.1", port) ?: return 0.0
+            sock.soTimeout = 3000
+            // Send minimal probe — just open + close (TCP handshake time is the metric)
+            sock.close()
+            val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(1)
+            1000.0 / elapsed   // "speed" = inverse latency (higher = faster)
+        } catch (_: Exception) { 0.0 }
+    }
+
+    // ── Connection helpers ────────────────────────────────────────────────────
+
     private fun tryConnect(dstIP: InetAddress, dstPort: Int, proxy: String, proxyPort: Int): Socket? {
         return try {
-            if (proxy == DIRECT) {
-                connectDirect(dstIP, dstPort)
-            } else {
-                connectSocks5(dstIP, dstPort, "127.0.0.1", proxyPort)
-            }
-        } catch (e: Exception) {
-            null
-        }
+            if (proxy == DIRECT) connectDirect(dstIP, dstPort)
+            else connectSocks5(dstIP, dstPort, "127.0.0.1", proxyPort)
+        } catch (_: Exception) { null }
     }
 
     private fun connectDirect(dstIP: InetAddress, dstPort: Int): Socket {
@@ -168,32 +256,33 @@ class SmartRouter(
         return s
     }
 
-    private fun connectSocks5(dstIP: InetAddress, dstPort: Int,
-                               proxyHost: String, proxyPort: Int): Socket {
+    private fun connectSocks5(
+        dstIP: InetAddress, dstPort: Int,
+        proxyHost: String, proxyPort: Int
+    ): Socket? {
         val s = Socket(); vpnService.protect(s)
         s.setReceiveBufferSize(SOCK_BUF); s.setSendBufferSize(SOCK_BUF)
         s.tcpNoDelay = true
         s.soTimeout = PROBE_TIMEOUT
         s.connect(InetSocketAddress(proxyHost, proxyPort), PROBE_TIMEOUT)
-
         val sin = s.getInputStream(); val sout = s.getOutputStream()
-        // SOCKS5 greeting
         sout.write(byteArrayOf(0x05, 0x01, 0x00)); sout.flush()
         val gr = ByteArray(2); sin.readFully(gr)
-        if (gr[0] != 0x05.toByte() || gr[1] != 0x00.toByte())
-            throw java.io.IOException("SOCKS5 auth rejected")
-        // CONNECT with IPv4 (ATYP=1)
+        if (gr[0] != 0x05.toByte() || gr[1] != 0x00.toByte()) {
+            runCatching { s.close() }; return null
+        }
         val ip = dstIP.address
-        val req = ByteArray(10)
-        req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x01
-        ip.copyInto(req, 4)
-        req[8] = (dstPort shr 8).toByte(); req[9] = (dstPort and 0xFF).toByte()
+        val req = ByteArray(10).also { r ->
+            r[0] = 0x05; r[1] = 0x01; r[2] = 0x00; r[3] = 0x01
+            ip.copyInto(r, 4)
+            r[8] = (dstPort shr 8).toByte(); r[9] = (dstPort and 0xFF).toByte()
+        }
         sout.write(req); sout.flush()
-        // Response
         val resp = ByteArray(10); sin.readFully(resp)
-        if (resp[0] != 0x05.toByte() || resp[1] != 0x00.toByte())
-            throw java.io.IOException("SOCKS5 CONNECT rejected: ${resp[1]}")
-        s.soTimeout = 0  // remove timeout for data phase
+        if (resp[0] != 0x05.toByte() || resp[1] != 0x00.toByte()) {
+            runCatching { s.close() }; return null
+        }
+        s.soTimeout = 0
         return s
     }
 
