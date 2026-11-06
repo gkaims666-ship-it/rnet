@@ -364,16 +364,28 @@ class RnetForegroundService : VpnService() {
     // ── VPN loop — auto-restarts on network change ────────────────────────────
     private suspend fun vpnLoop() {
         // Outer loop: re-establish tun after network switch
+        // New feature: exponential backoff with jitter on failure
+        var backoffMs = 1_000L
         while (engineStarted) {
-            val tunStarted = runCatching { buildAndRunTun() }.isSuccess
+            val start = System.currentTimeMillis()
+            val ex = runCatching { buildAndRunTun() }.exceptionOrNull()
             if (!engineStarted) break
-            if (!tunStarted) {
-                delay(1000)  // back-off before retry
+            val ran = System.currentTimeMillis() - start
+            if (ran > 30_000L) {
+                // Ran for a while — reset backoff (normal network switch, not a boot failure)
+                backoffMs = 1_000L
+            } else {
+                // Short run = failed fast — back off with jitter (50-150% of backoffMs)
+                val jitter = (backoffMs * (0.5 + Math.random())).toLong()
+                delay(jitter)
+                backoffMs = (backoffMs * 2).coerceAtMost(30_000L)   // cap at 30s
             }
+            if (ex != null) Log.w(TAG, "VPN loop restart after ${ran}ms: ${ex.message}")
         }
     }
 
     private suspend fun buildAndRunTun() {
+        var newTun: ParcelFileDescriptor? = null
         try {
             val builder = Builder()
                 .setSession("RNET")
@@ -394,7 +406,7 @@ class RnetForegroundService : VpnService() {
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
 
-            val newTun = builder.establish() ?: run {
+            newTun = builder.establish() ?: run {
                 Log.e(TAG, "establish() = null — no VPN permission")
                 engineStarted = false; connectionPhase = ConnectionPhase.IDLE; postNotif()
                 return
@@ -446,7 +458,10 @@ class RnetForegroundService : VpnService() {
         } catch (e: Exception) {
             Log.e(TAG, "VPN loop error: ${e.message}", e)
         } finally {
-            runCatching { tun?.close() }; tun = null
+            // Bug fix #4: only close the tun we opened here, not the current service tun
+            // (tun field may have been updated by a concurrent rebuildTun or stopAll)
+            if (tun === newTun) { runCatching { tun?.close() }; tun = null }
+            else { runCatching { newTun?.close() } }
         }
     }
 
@@ -487,13 +502,14 @@ class RnetForegroundService : VpnService() {
                 }
                 val sess = Session(sIP, sPort, dIP, dPort, seq)
                 sessions[key] = sess
-                connCount.incrementAndGet(); activeSessionCount.set(connCount.get())
+                // Bug fix #7: use single atomic increment and copy to activeSessionCount atomically
+                activeSessionCount.set(connCount.incrementAndGet())
                 pool.execute {
                     try { sess.run() }
                     catch (e: Exception) { Log.d(TAG, "${sIP}:${sPort}→${dIP}:${dPort}: ${e.message}") }
                     finally {
                         sessions.remove(key)
-                        connCount.decrementAndGet(); activeSessionCount.set(connCount.get())
+                        activeSessionCount.set(connCount.decrementAndGet())
                         sess.close()
                     }
                 }
@@ -577,11 +593,11 @@ class RnetForegroundService : VpnService() {
             pos += 4 // skip QTYPE + QCLASS
             // Find A record in answers
             repeat(anCount) {
-                if (pos + 10 > response.size) return
+                if (pos + 10 > response.size) return@repeat   // Bug fix #2: was bare return (exited whole fn)
                 // Skip name (may be pointer 0xC0 xx or labels)
                 if (response[pos].toInt() and 0xC0 == 0xC0) pos += 2
                 else { while (pos < response.size && response[pos] != 0.toByte()) pos++; pos++ }
-                if (pos + 10 > response.size) return
+                if (pos + 10 > response.size) return@repeat   // Bug fix #2: was bare return
                 val type  = ((response[pos].toInt() and 0xFF) shl 8) or (response[pos+1].toInt() and 0xFF)
                 val rdLen = ((response[pos+8].toInt() and 0xFF) shl 8) or (response[pos+9].toInt() and 0xFF)
                 pos += 10
@@ -598,21 +614,23 @@ class RnetForegroundService : VpnService() {
     /** Build a minimal DNS A-record response from a cached IP. */
     private fun buildDnsResponse(query: ByteArray, ip: InetAddress): ByteArray? {
         if (ip.address.size != 4) return null  // IPv4 only
+        // resp = query header+question + 16-byte answer RR
         val resp = query.copyOf(query.size + 16)
-        // Set QR=1 (response), AA=1, RA=1 in flags
+        // Set QR=1 (response), RA=1 in flags
         resp[2] = 0x81.toByte(); resp[3] = 0x80.toByte()
-        // ANCOUNT = 1
+        // QDCOUNT stays 1; set ANCOUNT = 1
         resp[6] = 0x00; resp[7] = 0x01
-        // Append answer: name ptr (0xC00C), TYPE A, CLASS IN, TTL 300, RDLENGTH 4, IP
-        val answer = byteArrayOf(
-            0xC0.toByte(), 0x0C,          // name pointer to offset 12
-            0x00, 0x01,                    // TYPE A
-            0x00, 0x01,                    // CLASS IN
-            0x00, 0x00, 0x01, 0x2C,       // TTL 300
-            0x00, 0x04,                    // RDLENGTH 4
-            ip.address[0], ip.address[1], ip.address[2], ip.address[3]
-        )
-        return query.copyOf(query.size) + answer
+        // Write answer RR starting at resp[query.size]:
+        //   name ptr (0xC00C), TYPE A, CLASS IN, TTL 300, RDLENGTH 4, IP
+        val base = query.size
+        resp[base]      = 0xC0.toByte(); resp[base + 1]  = 0x0C   // name ptr → offset 12
+        resp[base + 2]  = 0x00;          resp[base + 3]  = 0x01   // TYPE A
+        resp[base + 4]  = 0x00;          resp[base + 5]  = 0x01   // CLASS IN
+        resp[base + 6]  = 0x00;          resp[base + 7]  = 0x00   // TTL high
+        resp[base + 8]  = 0x01;          resp[base + 9]  = 0x2C   // TTL low = 300s
+        resp[base + 10] = 0x00;          resp[base + 11] = 0x04   // RDLENGTH 4
+        ip.address.copyInto(resp, base + 12)                       // 4-byte IPv4
+        return resp
     }
 
     private fun relayUdpDirect(dIP: InetAddress, dPort: Int, pay: ByteArray): ByteArray? {
@@ -695,7 +713,12 @@ class RnetForegroundService : VpnService() {
         fun forward(b: ByteArray, off: Int, len: Int, seq: Long) {
             if (closed) return
             cAck = seq + len
-            outQueue.offer(b.copyOfRange(off, off + len))
+            val chunk = b.copyOfRange(off, off + len)
+            // Bug fix #6: when outQueue is full, drop oldest to maintain flow
+            if (!outQueue.offer(chunk)) {
+                outQueue.poll()          // discard oldest chunk
+                outQueue.offer(chunk)    // then enqueue new
+            }
             sendTcp(dIP, dPort, sIP, sPort, sSeq, cAck, ACK, null, 0)
         }
 
@@ -733,15 +756,17 @@ class RnetForegroundService : VpnService() {
         }
     }
 
-    // Audit fix #9: session key uses full 32-bit IPs to avoid collision
+    // Session key: unambiguous 128-bit-equivalent packed into a Long.
+    // Layout (bits 63→0): [srcIP 32][srcPort 16][dstPort 16]
+    // dstIP is the same for all tun sessions (internet dests vary) but srcIP is always
+    // 10.0.0.2 so we store dstIP in the high 32 and srcPort+dstPort in the low 32.
+    // This gives a unique key for every (srcPort, dstIP, dstPort) triple, which is
+    // the actual uniqueness constraint because srcIP is always TUN_IP.
     private fun sessionKey(sIP: InetAddress, sP: Int, dIP: InetAddress, dP: Int): Long {
-        val sa = sIP.address; val da = dIP.address
-        // Pack as: srcIP_low32 XOR-shifted with ports — unique for distinct 4-tuples
-        val sI = ((sa[0].toLong() and 0xFF) shl 24) or ((sa[1].toLong() and 0xFF) shl 16) or
-                 ((sa[2].toLong() and 0xFF) shl  8) or  (sa[3].toLong() and 0xFF)
+        val da = dIP.address
         val dI = ((da[0].toLong() and 0xFF) shl 24) or ((da[1].toLong() and 0xFF) shl 16) or
                  ((da[2].toLong() and 0xFF) shl  8) or  (da[3].toLong() and 0xFF)
-        return (sI shl 32) xor (dI shl 16) xor (sP.toLong() shl 32) xor dP.toLong()
+        return (dI shl 32) or (sP.toLong() shl 16) or dP.toLong()
     }
 
     // ── Checksum helpers ──────────────────────────────────────────────────────

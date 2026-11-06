@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.rnet.app.transport.PsiphonTransport
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
@@ -35,7 +36,9 @@ class TunnelPool(
         val transport: PsiphonTransport,
         @Volatile var port: Int = 0,
         @Volatile var ready: Boolean = false,
-        @Volatile var lastUsedMs: Long = System.currentTimeMillis()
+        @Volatile var lastUsedMs: Long = System.currentTimeMillis(),
+        // Bug fix #5: latch lets other threads wait for startup without holding the lock
+        val startLatch: CountDownLatch = CountDownLatch(1)
     )
 
     private val tunnels = ConcurrentHashMap<String, TunnelEntry>()
@@ -49,12 +52,22 @@ class TunnelPool(
     /**
      * Get the SOCKS5 port for the given region.
      * Starts the tunnel if not running. Returns -1 on failure.
+     * Bug fix #5: if a startup is already in progress, wait on its latch instead of
+     * competing for the lock (avoids one 60s startup blocking all others).
      */
     fun getSocksPort(region: String): Int {
         val entry = tunnels[region]
-        if (entry != null && entry.ready) {
-            entry.lastUsedMs = System.currentTimeMillis()
-            return entry.port
+        if (entry != null) {
+            if (entry.ready) {
+                entry.lastUsedMs = System.currentTimeMillis()
+                return entry.port
+            }
+            // Startup already in progress — wait for it rather than blocking the lock
+            if (entry.startLatch.await(START_TIMEOUT_MS, TimeUnit.MILLISECONDS) && entry.ready) {
+                entry.lastUsedMs = System.currentTimeMillis()
+                return entry.port
+            }
+            return -1
         }
         return startTunnel(region)
     }
@@ -75,36 +88,42 @@ class TunnelPool(
     // ── Internal ──────────────────────────────────────────────────────────────
 
     private fun startTunnel(region: String): Int {
-        lock.withLock {
+        val entry: TunnelEntry = lock.withLock {
             // Double-check after acquiring lock
-            tunnels[region]?.let { if (it.ready) return it.port }
-
+            tunnels[region]?.let {
+                if (it.ready) return it.port  // already ready
+                return it.startLatch.await(START_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                    .let { ok -> if (ok && it.ready) it.port else -1 }
+            }
             // Evict LRU tunnel if at capacity
             if (tunnels.size >= MAX_TUNNELS) evictLru()
 
             Log.i(TAG, "Starting tunnel for region=$region")
             val transport = PsiphonTransport(context, region)
-            val entry = TunnelEntry(region, transport)
-            tunnels[region] = entry
+            val e = TunnelEntry(region, transport)
+            tunnels[region] = e
+            e   // return the entry; lock is released immediately after
+        }
 
-            return try {
-                val addr = transport.start()   // blocks up to 60s
-                val port = addr.substringAfterLast(":").toIntOrNull() ?: -1
-                if (port > 0) {
-                    entry.port  = port
-                    entry.ready = true
-                    entry.lastUsedMs = System.currentTimeMillis()
-                    Log.i(TAG, "Tunnel $region ready on port $port")
-                    port
-                } else {
-                    tunnels.remove(region)
-                    -1
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Tunnel $region failed: ${e.message}")
+        // Bug fix #5: transport.start() (up to 60s) runs OUTSIDE the lock
+        return try {
+            val addr = entry.transport.start()
+            val port = addr.substringAfterLast(":").toIntOrNull() ?: -1
+            if (port > 0) {
+                entry.port  = port
+                entry.ready = true
+                entry.lastUsedMs = System.currentTimeMillis()
+                Log.i(TAG, "Tunnel $region ready on port $port")
+            } else {
                 tunnels.remove(region)
-                -1
+                Log.w(TAG, "Tunnel $region returned invalid port")
             }
+            port.also { entry.startLatch.countDown() }
+        } catch (e: Exception) {
+            Log.w(TAG, "Tunnel $region failed: ${e.message}")
+            tunnels.remove(region)
+            entry.startLatch.countDown()
+            -1
         }
     }
 
