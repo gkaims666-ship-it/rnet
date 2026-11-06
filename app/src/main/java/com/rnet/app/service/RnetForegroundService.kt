@@ -161,7 +161,18 @@ class RnetForegroundService : VpnService() {
     override fun onCreate() { super.onCreate(); makeChan(); cellMon = CellMonitor(this) }
 
     override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
-        startForeground(NOTIF, notif())
+        // Android 14+ requires specifying foregroundServiceType explicitly.
+        // Passing the deprecated 2-arg form on API 34+ can throw
+        // ForegroundServiceStartNotAllowedException and crash the service instantly.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIF, notif(),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            startForeground(NOTIF, notif())
+        }
         when (i?.action) {
             ACTION_START         -> start()
             ACTION_STOP          -> { stop(); stopGw() }
