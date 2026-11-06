@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rnet.app.gateway.HotspotGateway
 import com.rnet.app.prefs.ServerPrefs
+import com.rnet.app.service.ConnectionPhase
 import com.rnet.app.service.RnetForegroundService
 import com.rnet.app.transport.CellMonitor
 import com.rnet.app.transport.CellSnapshot
@@ -30,8 +31,7 @@ data class UiState(
     // New fields
     val activeSessionCount: Int     = 0,        // live TCP sessions through the VPN
     val proxyLabel: String          = "—",      // "Psiphon" / "Direct" / "Reconnecting…"
-    val connectionPhase: com.rnet.app.service.RnetForegroundService.Phase =
-        com.rnet.app.service.RnetForegroundService.Phase.IDLE
+    val connectionPhase: ConnectionPhase = ConnectionPhase.IDLE
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {

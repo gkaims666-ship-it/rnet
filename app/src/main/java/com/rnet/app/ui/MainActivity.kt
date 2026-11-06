@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.ui.draw.alpha
+import com.rnet.app.service.ConnectionPhase
 import com.rnet.app.service.RnetForegroundService
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -271,8 +272,8 @@ private fun EngineToggleCard(state: UiState, onToggle: (Boolean) -> Unit) {
             repeatMode = RepeatMode.Reverse
         ), label = "pulseAlpha"
     )
-    val isFinding = state.connectionPhase == RnetForegroundService.Phase.FINDING_PROXY ||
-                    state.connectionPhase == RnetForegroundService.Phase.STARTING
+    val isFinding = state.connectionPhase == ConnectionPhase.FINDING_PROXY ||
+                    state.connectionPhase == ConnectionPhase.STARTING
     Card(
         modifier = Modifier.fillMaxWidth().border(1.dp, borderColor, MaterialTheme.shapes.medium),
         colors = CardDefaults.cardColors(containerColor = cardColor),
@@ -296,8 +297,8 @@ private fun EngineToggleCard(state: UiState, onToggle: (Boolean) -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (active) {
                         val dotColor = when (state.connectionPhase) {
-                            RnetForegroundService.Phase.ACTIVE        -> Color(0xFF4CAF50)
-                            RnetForegroundService.Phase.FINDING_PROXY -> Color(0xFFFFB74D)
+                            ConnectionPhase.ACTIVE        -> Color(0xFF4CAF50)
+                            ConnectionPhase.FINDING_PROXY -> Color(0xFFFFB74D)
                             else                                       -> Color(0xFFB39DDB)
                         }
                         Box(
@@ -311,9 +312,9 @@ private fun EngineToggleCard(state: UiState, onToggle: (Boolean) -> Unit) {
                     }
                     val statusText = when {
                         !active -> stringResource(R.string.engine_status_inactive)
-                        state.connectionPhase == RnetForegroundService.Phase.FINDING_PROXY ->
+                        state.connectionPhase == ConnectionPhase.FINDING_PROXY ->
                             stringResource(R.string.vpn_status_starting_tunnel)
-                        state.connectionPhase == RnetForegroundService.Phase.ACTIVE ->
+                        state.connectionPhase == ConnectionPhase.ACTIVE ->
                             stringResource(R.string.engine_status_active)
                         else -> stringResource(R.string.vpn_status_connecting)
                     }

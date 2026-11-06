@@ -10,6 +10,7 @@ import androidx.core.app.NotificationCompat
 import com.rnet.app.R
 import com.rnet.app.gateway.HotspotGateway
 import com.rnet.app.transport.CellMonitor
+import com.rnet.app.service.ConnectionPhase
 import com.rnet.app.transport.DoHResolver
 import com.rnet.app.transport.PsiphonTransport
 import com.rnet.app.ui.MainActivity
@@ -71,11 +72,12 @@ class RnetForegroundService : VpnService() {
         @JvmField val activeBytesOut     = AtomicLong(0L)
         @JvmField val activeSessionCount = AtomicInteger(0)
         @Volatile var proxyLabel         = "—"
-        @Volatile var connectionPhase    = Phase.IDLE
+        @Volatile var connectionPhase    = ConnectionPhase.IDLE
         @Volatile var activeSocksPort    = 0  // kept for legacy VM compat
-
-        enum class Phase { IDLE, STARTING, FINDING_PROXY, ACTIVE }
     }
+
+    
+
 
     private val pool     = Executors.newCachedThreadPool()
     private val svcScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -126,7 +128,7 @@ class RnetForegroundService : VpnService() {
     private fun start() {
         if (engineStarted) return
         engineStarted = true
-        connectionPhase = Phase.STARTING
+        connectionPhase = ConnectionPhase.STARTING
         activeBytesIn.set(0); activeBytesOut.set(0)
         activeSessionCount.set(0)
         activeProxy.set(null)
@@ -142,7 +144,7 @@ class RnetForegroundService : VpnService() {
     private fun stop() {
         if (!engineStarted) return
         engineStarted = false; alive = false
-        connectionPhase = Phase.IDLE; proxyLabel = "—"
+        connectionPhase = ConnectionPhase.IDLE; proxyLabel = "—"
         sessions.values.forEach { runCatching { it.close() } }; sessions.clear()
         try { tun?.close() } catch (_: Exception) {}; tun = null
         try { psiphon?.stop() } catch (_: Exception) {}; psiphon = null
@@ -156,7 +158,7 @@ class RnetForegroundService : VpnService() {
     // ── Psiphon start ────────────────────────────────────────────────────────
 
     private suspend fun startPsiphon() = withContext(Dispatchers.IO) {
-        connectionPhase = Phase.FINDING_PROXY
+        connectionPhase = ConnectionPhase.FINDING_PROXY
         try {
             Log.i(TAG, "Starting Psiphon…")
             val addr = psiphon!!.start()   // blocks up to 60s
@@ -164,15 +166,15 @@ class RnetForegroundService : VpnService() {
             activeSocksPort = port
             activeProxy.set(ProxyEntry("127.0.0.1", port, "Psiphon"))
             proxyLabel = "Psiphon"
-            connectionPhase = Phase.ACTIVE
+            connectionPhase = ConnectionPhase.ACTIVE
             Log.i(TAG, "Psiphon ready → SOCKS5 127.0.0.1:$port")
             postNotif()
         } catch (e: Exception) {
             Log.w(TAG, "Psiphon failed: ${e.message}")
             // Fall through — VPN still routes, sessions will use direct
-            if (connectionPhase != Phase.ACTIVE) {
+            if (connectionPhase != ConnectionPhase.ACTIVE) {
                 proxyLabel = "Direct"
-                connectionPhase = Phase.ACTIVE
+                connectionPhase = ConnectionPhase.ACTIVE
                 postNotif()
             }
         }
@@ -226,7 +228,7 @@ class RnetForegroundService : VpnService() {
 
             tun = builder.establish() ?: run {
                 Log.e(TAG, "establish() = null — no VPN permission")
-                engineStarted = false; connectionPhase = Phase.IDLE; postNotif(); return
+                engineStarted = false; connectionPhase = ConnectionPhase.IDLE; postNotif(); return
             }
 
             alive = true
@@ -587,10 +589,10 @@ class RnetForegroundService : VpnService() {
             Intent(this, RnetForegroundService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_IMMUTABLE)
         val statusText = when (connectionPhase) {
-            Phase.IDLE          -> getString(R.string.vpn_status_connecting)
-            Phase.STARTING      -> getString(R.string.vpn_status_connecting)
-            Phase.FINDING_PROXY -> getString(R.string.vpn_status_starting_tunnel)
-            Phase.ACTIVE        -> "${getString(R.string.vpn_status_active)} · $proxyLabel"
+            ConnectionPhase.IDLE          -> getString(R.string.vpn_status_connecting)
+            ConnectionPhase.STARTING      -> getString(R.string.vpn_status_connecting)
+            ConnectionPhase.FINDING_PROXY -> getString(R.string.vpn_status_starting_tunnel)
+            ConnectionPhase.ACTIVE        -> "${getString(R.string.vpn_status_active)} · $proxyLabel"
         }
         return NotificationCompat.Builder(this, CH_ID)
             .setContentTitle(getString(R.string.notif_title))
