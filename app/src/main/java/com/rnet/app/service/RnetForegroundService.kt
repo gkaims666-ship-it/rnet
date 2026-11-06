@@ -121,6 +121,12 @@ class RnetForegroundService : VpnService() {
         ThreadPoolExecutor.CallerRunsPolicy()
     )
 
+    // Dedicated DNS thread pool — bounded so DoH timeouts can't exhaust the main pool
+    private val dnsPool = ThreadPoolExecutor(
+        2, 16, 30L, TimeUnit.SECONDS, LinkedBlockingDeque(64),
+        ThreadPoolExecutor.DiscardOldestPolicy()   // drop oldest pending DNS if queue full
+    )
+
     private val svcScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var tun: ParcelFileDescriptor? = null
 
@@ -417,48 +423,65 @@ class RnetForegroundService : VpnService() {
         if (!engineStarted) return@withContext
         try {
             val host = "ipinfo.io"
-            val port = 80  // plain HTTP — simpler, no TLS setup, tiny response
+            val port = 80  // plain HTTP — no TLS setup needed for a 2-letter country code
 
-            // Connect to the SOCKS5 proxy directly (127.0.0.1) — bypasses the tun fd
+            // Connect directly to the SOCKS5 proxy on localhost — this socket is protect()ed
+            // so it bypasses the VPN tun and goes straight to the network.
             val s = Socket()
-            protect(s)   // protect so the socket doesn't loop back through the tun
+            protect(s)
             s.soTimeout = 10_000
             s.connect(InetSocketAddress("127.0.0.1", socksPort), 5_000)
-            val sin = s.getInputStream(); val sout = s.getOutputStream()
+            s.use { sock ->
+                val din  = java.io.DataInputStream(sock.getInputStream())
+                val sout = sock.getOutputStream()
 
-            // SOCKS5 greeting
-            sout.write(byteArrayOf(0x05, 0x01, 0x00)); sout.flush()
-            val gr = ByteArray(2); sin.read(gr)
-            if (gr[0] != 0x05.toByte() || gr[1] != 0x00.toByte()) { s.close(); return@withContext }
+                // SOCKS5 greeting — no auth
+                sout.write(byteArrayOf(0x05, 0x01, 0x00)); sout.flush()
+                val gr = ByteArray(2); din.readFully(gr)
+                if (gr[0] != 0x05.toByte() || gr[1] != 0x00.toByte()) return@withContext
 
-            // SOCKS5 CONNECT with ATYP=3 (hostname) — proxy resolves DNS externally
-            val hostBytes = host.toByteArray(Charsets.US_ASCII)
-            val req = ByteArray(7 + hostBytes.size).also { r ->
-                r[0] = 0x05; r[1] = 0x01; r[2] = 0x00
-                r[3] = 0x03                         // ATYP = domain name
-                r[4] = hostBytes.size.toByte()
-                hostBytes.copyInto(r, 5)
-                r[5 + hostBytes.size] = (port shr 8).toByte()
-                r[6 + hostBytes.size] = (port and 0xFF).toByte()
-            }
-            sout.write(req); sout.flush()
-            val resp = ByteArray(10); sin.read(resp)
-            if (resp[0] != 0x05.toByte() || resp[1] != 0x00.toByte()) { s.close(); return@withContext }
+                // SOCKS5 CONNECT with ATYP=3 (hostname) — proxy resolves DNS externally.
+                // This avoids any DNS call on our end (no routing loop).
+                val hostBytes = host.toByteArray(Charsets.US_ASCII)
+                val req = ByteArray(7 + hostBytes.size).also { r ->
+                    r[0] = 0x05; r[1] = 0x01; r[2] = 0x00
+                    r[3] = 0x03                         // ATYP = domain name
+                    r[4] = hostBytes.size.toByte()
+                    hostBytes.copyInto(r, 5)
+                    r[5 + hostBytes.size] = (port shr 8).toByte()
+                    r[6 + hostBytes.size] = (port and 0xFF).toByte()
+                }
+                sout.write(req); sout.flush()
 
-            // Plain HTTP GET /country — returns just the 2-letter country code
-            sout.write("GET /country HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray())
-            sout.flush()
-            val body = sin.bufferedReader().readText()
-            s.close()
+                // SOCKS5 CONNECT response — read the fixed 4-byte header first,
+                // then drain the variable-length bound address field.
+                // Format: VER(1) REP(1) RSV(1) ATYP(1) [BND.ADDR] BND.PORT(2)
+                val hdr = ByteArray(4); din.readFully(hdr)
+                if (hdr[0] != 0x05.toByte() || hdr[1] != 0x00.toByte()) return@withContext
+                when (hdr[3].toInt() and 0xFF) {
+                    0x01 -> { val skip = ByteArray(4 + 2); din.readFully(skip) }  // IPv4 + port
+                    0x04 -> { val skip = ByteArray(16 + 2); din.readFully(skip) } // IPv6 + port
+                    0x03 -> {                                                       // domain + port
+                        val len = din.read() and 0xFF
+                        val skip = ByteArray(len + 2); din.readFully(skip)
+                    }
+                    else -> return@withContext
+                }
 
-            // Response body is the 2-letter country code after the HTTP headers
-            val country = body.substringAfterLast("\r\n\r\n").trim().take(2).uppercase()
-            if (country.length == 2 && country.all { it.isLetter() }) {
-                Log.i(TAG, "Actual exit: $country (requested: $requestedRegion)")
-                exitRegion = country
-                proxyLabel = "Smart·$country"
-                LocationMasker.start(applicationContext, country)
-                postNotif()
+                // Proxy connected — send plain HTTP GET /country
+                sout.write("GET /country HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray())
+                sout.flush()
+
+                // Read response — find blank line separating headers from body
+                val body = sock.getInputStream().bufferedReader().readText()
+                val country = body.substringAfterLast("\r\n\r\n").trim().take(2).uppercase()
+                if (country.length == 2 && country.all { it.isLetter() }) {
+                    Log.i(TAG, "Actual exit: $country (requested: $requestedRegion)")
+                    exitRegion = country
+                    proxyLabel = "Smart·$country"
+                    LocationMasker.start(applicationContext, country)
+                    postNotif()
+                }
             }
         } catch (e: Exception) {
             Log.d(TAG, "Exit IP check skipped: ${e.message}")
@@ -503,8 +526,9 @@ class RnetForegroundService : VpnService() {
                         it.getOutputStream().write(byteArrayOf(0x05, 0x01, 0x00))
                         it.getOutputStream().flush()
                         val resp = ByteArray(2)
-                        val n = it.getInputStream().read(resp)
-                        n == 2 && resp[0] == 0x05.toByte() && resp[1] == 0x00.toByte()
+                        val din = java.io.DataInputStream(it.getInputStream())
+                        din.readFully(resp)   // must read exactly 2 bytes
+                        resp[0] == 0x05.toByte() && resp[1] == 0x00.toByte()
                     }
                 } catch (_: Exception) { false }
 
@@ -514,10 +538,12 @@ class RnetForegroundService : VpnService() {
                 }
             }
 
-            // Update UI stats
+            // Update UI stats — don't overwrite a "Switching…" label mid-transition
             routeCacheSize = smartRouter?.routeCacheSize ?: 0
             pooledSockets  = smartRouter?.connPool?.totalPooled() ?: 0
-            proxyLabel = "Smart·${exitRegion} (${routeCacheSize}✓ ${pooledSockets}⚡)"
+            if (!proxyLabel.startsWith("Switching")) {
+                proxyLabel = "Smart·${exitRegion} (${routeCacheSize}✓ ${pooledSockets}⚡)"
+            }
             postNotif()
         }
     }
@@ -719,14 +745,20 @@ class RnetForegroundService : VpnService() {
         val pLen  = (uLen - 8).coerceAtMost(n - ipHL - 8).coerceAtLeast(0)
         if (pLen <= 0) return
         val pay = b.copyOfRange(ipHL + 8, ipHL + 8 + pLen)
-        pool.execute { relayUdp(sIP, sPort, dIP, dPort, pay) }
+        // DNS goes to dedicated pool to prevent slow DoH from exhausting TCP thread pool
+        val execPool = if (dPort == 53) dnsPool else pool
+        execPool.execute { relayUdp(sIP, sPort, dIP, dPort, pay) }
     }
 
     private fun relayUdp(sIP: InetAddress, sPort: Int, dIP: InetAddress, dPort: Int, pay: ByteArray) {
         val resp: ByteArray? = if (dPort == 53) {
-            // DNS: check cache first, then parallel DoH (audit fix #8), then UDP fallback
+            // DNS: check cache first, then parallel DoH (protect()ed), then UDP fallback.
+            // CRITICAL: pass protect lambda to DoH so the underlying TLS socket bypasses
+            // the VPN tun. Without protect(), the DoH connection routes through the tun
+            // itself → triggers another DNS lookup → infinite recursion → deadlock.
             val cached = tryResolveDnsFromCache(pay)
-            cached ?: DoHResolver.resolveParallel(pay)?.also { storeDnsToCache(pay, it) }
+            cached ?: DoHResolver.resolveParallel(pay, protect = { sock -> protect(sock) })
+                       ?.also { storeDnsToCache(pay, it) }
                     ?: DoHResolver.resolveUdp(pay) { sock -> protect(sock) }
         } else {
             relayUdpDirect(dIP, dPort, pay)
@@ -854,8 +886,9 @@ class RnetForegroundService : VpnService() {
         clientIsn: Long
     ) {
         private val serverIsn = System.nanoTime() and 0xFFFFFFFFL
-        @Volatile private var sSeq = serverIsn + 1
-        @Volatile private var cAck = clientIsn + 1
+        // TCP sequence numbers must wrap at 2^32 (modular arithmetic per RFC 793)
+        @Volatile private var sSeq = (serverIsn + 1) and 0xFFFFFFFFL
+        @Volatile private var cAck = (clientIsn + 1) and 0xFFFFFFFFL
 
         private val outQueue = ArrayBlockingQueue<ByteArray>(SESSION_QUEUE_CAPACITY)
         private val POISON   = ByteArray(0)
@@ -879,7 +912,8 @@ class RnetForegroundService : VpnService() {
                     while (!closed) {
                         val n = sin.read(buf); if (n < 0) break; if (n == 0) continue
                         sendTcp(dIP, dPort, sIP, sPort, sSeq, cAck, PSH or ACK, buf, n)
-                        sSeq += n; activeBytesIn.addAndGet(n.toLong())
+                        sSeq = (sSeq + n) and 0xFFFFFFFFL  // 32-bit wrap per RFC 793
+                        activeBytesIn.addAndGet(n.toLong())
                     }
                     if (!closed) sendTcp(dIP, dPort, sIP, sPort, sSeq, cAck, FIN or ACK, null, 0)
                 } catch (_: Exception) {}
@@ -903,7 +937,7 @@ class RnetForegroundService : VpnService() {
 
         fun forward(b: ByteArray, off: Int, len: Int, seq: Long) {
             if (closed) return
-            cAck = seq + len
+            cAck = (seq + len) and 0xFFFFFFFFL  // 32-bit wrap per RFC 793
             val chunk = b.copyOfRange(off, off + len)
             // Bug fix #6: when outQueue is full, drop oldest to maintain flow
             if (!outQueue.offer(chunk)) {
