@@ -280,7 +280,8 @@ class RnetForegroundService : VpnService() {
 
             // Keep coroutine alive until stopped
             withContext(Dispatchers.IO) { reader.join() }
-        } catch (_: CancellationException) {
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // coroutine cancelled normally
         } catch (e: Exception) {
             Log.e(TAG, "VPN loop crashed: ${e.message}", e)
         } finally {
