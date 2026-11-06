@@ -30,8 +30,9 @@ data class UiState(
     val errorMessage: String?       = null,
     // New fields
     val activeSessionCount: Int     = 0,        // live TCP sessions through the VPN
-    val proxyLabel: String          = "—",      // "Psiphon" / "Direct" / "Reconnecting…"
-    val connectionPhase: ConnectionPhase = ConnectionPhase.IDLE
+    val proxyLabel: String          = "—",      // "Psiphon·NL" / "Direct" / "Reconnecting…"
+    val connectionPhase: ConnectionPhase = ConnectionPhase.IDLE,
+    val exitRegion: String          = ""        // Psiphon exit country code e.g. "NL"
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -60,12 +61,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val sessions = RnetForegroundService.activeSessionCount.get()
                 val proxy    = RnetForegroundService.proxyLabel
                 val phase    = RnetForegroundService.connectionPhase
+                val region   = RnetForegroundService.exitRegion
                 _ui.update { it.copy(
                     totalBytesIn       = bytesIn,
                     totalBytesOut      = bytesOut,
                     activeSessionCount = sessions,
                     proxyLabel         = proxy,
-                    connectionPhase    = phase
+                    connectionPhase    = phase,
+                    exitRegion         = region
                 ) }
             }
         }

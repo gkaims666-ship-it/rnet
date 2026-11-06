@@ -27,7 +27,11 @@ import org.json.JSONObject
  * distributed under GPL v3 when this module is compiled in.
  * See LICENSE in the repository root.
  */
-class PsiphonTransport(private val context: Context) : PsiphonTunnel.HostService {
+class PsiphonTransport(
+    private val context: Context,
+    /** Psiphon egress region code, e.g. "NL", "DE", "US", "" = fastest */
+    private val egressRegion: String = "NL"
+) : PsiphonTunnel.HostService {
 
     private val TAG = "PsiphonTransport"
 
@@ -175,7 +179,14 @@ class PsiphonTransport(private val context: Context) : PsiphonTunnel.HostService
             context.getDir("psiphon_data", Context.MODE_PRIVATE).absolutePath)
         put("LocalSocksProxyPort", 0)
         put("LocalHttpProxyPort",  0)
-        put("EgressRegion", "")
+        put("EgressRegion", egressRegion)       // location masking: exit in chosen country
         put("InproxyEnableProxy", false)
+        // Speed tuning
+        put("ConnectionWorkerPoolSize", 10)     // parallel tunnel connection attempts
+        put("TunnelProtocolOrder",              // prefer fast protocols first
+            org.json.JSONArray().apply {
+                put("OSSH"); put("SSH"); put("FRONTED-MEEK-OSSH"); put("FRONTED-MEEK")
+            })
+        put("NetworkLatencyMultiplier", 1.0)    // don't add extra latency
     }.toString()
 }

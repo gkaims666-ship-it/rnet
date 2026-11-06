@@ -353,12 +353,21 @@ private fun ConnectionStatusCard(state: UiState) {
                 MetricRow(
                     label = "Circumvention",
                     value = state.proxyLabel,
-                    valueColor = when (state.proxyLabel) {
-                        "Psiphon" -> Color(0xFF81C784)
-                        "Direct"  -> Color(0xFFFFB74D)
-                        else      -> Color(0xFFB39DDB)
+                    valueColor = when {
+                        state.proxyLabel.startsWith("Psiphon") -> Color(0xFF81C784)
+                        state.proxyLabel == "Direct"           -> Color(0xFFFFB74D)
+                        else                                   -> Color(0xFFB39DDB)
                     }
                 )
+                // Location masking — shows exit country flag + code
+                if (state.exitRegion.isNotEmpty()) {
+                    val regionFlag = regionFlag(state.exitRegion)
+                    MetricRow(
+                        label = "Location",
+                        value = "$regionFlag ${state.exitRegion}",
+                        valueColor = Color(0xFF80DEEA)
+                    )
+                }
                 // Active TCP sessions
                 MetricRow(
                     label = "Active Sessions",
@@ -556,6 +565,14 @@ private fun formatBytes(bytes: Long): String = when {
     bytes >= 1_000_000L     -> "%.1f MB".format(bytes / 1_000_000f)
     bytes >= 1_000L         -> "%.1f KB".format(bytes / 1_000f)
     else                    -> "$bytes B"
+}
+
+/** Convert ISO 3166-1 alpha-2 country code to its emoji flag. */
+private fun regionFlag(code: String): String {
+    if (code.length != 2) return "🌍"
+    val base = 0x1F1E6 - 'A'.code
+    return String(Character.toChars(base + code[0].uppercaseChar().code)) +
+           String(Character.toChars(base + code[1].uppercaseChar().code))
 }
 
 /** Dark color scheme used throughout the app — black and purple. */
