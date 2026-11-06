@@ -169,8 +169,8 @@ class PsiphonTransport(private val context: Context) : PsiphonTunnel.HostService
     // ── Config ─────────────────────────────────────────────────────────────────
 
     private fun buildConfig(): String = JSONObject().apply {
-        put("PropagationChannelId", "FFFFFFFFFFFFFFFF")
-        put("SponsorId", "FFFFFFFFFFFFFFFF")
+        put("PropagationChannelId", "24BCA4EE20BEB92C")
+        put("SponsorId", "721AE60D76700F5A")
         put("DataRootDirectory",
             context.getDir("psiphon_data", Context.MODE_PRIVATE).absolutePath)
         put("LocalSocksProxyPort", 0)

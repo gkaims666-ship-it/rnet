@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class HotspotGateway(
     private val context: Context,
-    private val engine: MultipathEngine
+    private val engine: MultipathEngine?
 ) {
 
     data class StationMetrics(
@@ -164,12 +164,12 @@ class HotspotGateway(
                 val data = buf.copyOf(n)
                 metrics.bytesIn.addAndGet(n.toLong())
                 _totalBytesIn.value += n
-                engine.send(data)
+                engine?.send(data)
             }
         }
         // Return traffic from engine to client
         val backward = scope.launch {
-            engine.inbound.collect { data ->
+            engine?.inbound?.collect { data ->
                 clientOut.write(data)
                 clientOut.flush()
                 metrics.bytesOut.addAndGet(data.size.toLong())

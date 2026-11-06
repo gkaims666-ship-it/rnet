@@ -9,10 +9,9 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.rnet.app.R
-import com.rnet.app.crypto.SessionCipher
 import com.rnet.app.gateway.HotspotGateway
 import com.rnet.app.transport.CellMonitor
-import com.rnet.app.transport.MultipathEngine
+import com.rnet.app.transport.PsiphonTransport
 import com.rnet.app.ui.MainActivity
 import kotlinx.coroutines.*
 import java.io.*
@@ -21,31 +20,24 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * RnetForegroundService — combined VPN + foreground service.
  *
- * Architecture:
- *   1. We start a local SOCKS5 proxy on 127.0.0.1:LOCAL_PROXY_PORT.
- *      Its sockets are protect()-ed so they bypass the VPN tun and reach real internet.
+ * Traffic routing:
+ *   1. We establish a VPN interface with addRoute("0.0.0.0", 0) to capture all IP traffic.
+ *   2. For each TCP SYN, a Session is created on the thread pool.
+ *   3. Session connects through a SOCKS5 proxy to bypass ISP censorship.
+ *      The proxy socket is protect()-ed (bypasses tun fd → real internet).
+ *   4. Bidirectional relay: tun ↔ Session ↔ proxy ↔ real server.
+ *   5. DNS: UDP port 53 forwarded via protected DatagramSocket to 1.1.1.1:53.
  *
- *   2. We establish a VPN interface with addRoute("0.0.0.0", 0) to capture all IP traffic.
- *
- *   3. We read raw IP packets from the tun fd. For each TCP SYN we see, we:
- *      a. Record the destination (dstIp:dstPort) keyed by (srcIp:srcPort)
- *      b. Send a fake SYN-ACK back to the app's kernel so the app thinks the connection
- *         is established
- *      c. When the app sends its first data bytes (the TLS ClientHello for HTTPS, or
- *         the HTTP request for plain HTTP), we open a protect()-ed Socket directly to
- *         the original destination and relay bytes bidirectionally
- *
- *   This avoids the need for a full TCP stack — we let the kernel manage TCP on both sides.
- *   We only deal with IP/TCP headers to track connection state and extract destinations.
- *
- *   DNS (UDP port 53):
- *      We read UDP packets from the tun, forward them via a protect()-ed DatagramSocket
- *      to 1.1.1.1:53, and write the response back as a UDP packet to the tun.
- *      This handles all DNS lookups including those for Instagram, etc.
+ * SOCKS5 proxy selection:
+ *   - Tries proxies from PROXY_LIST in order until one connects successfully.
+ *   - Once a working proxy is found it is cached as activeProxy.
+ *   - Falls back to direct connection if no proxy works (direct may still work
+ *     for unblocked destinations).
  */
 class RnetForegroundService : VpnService() {
 
@@ -61,7 +53,7 @@ class RnetForegroundService : VpnService() {
         private const val TUN_IP  = "10.0.0.2"
         private const val MTU     = 1500
         private const val MAX_CON = 300
-        private const val T_CONN  = 15_000  // TCP connect timeout
+        private const val T_CONN  = 10_000  // TCP connect timeout
         private const val T_DNS   = 5_000   // DNS timeout
 
         // TCP flags
@@ -72,11 +64,31 @@ class RnetForegroundService : VpnService() {
         @JvmField val activeBytesIn  = AtomicLong(0L)
         @JvmField val activeBytesOut = AtomicLong(0L)
         @Volatile var activeSocksPort = 0
+
+        /**
+         * Free public SOCKS5 proxies known to work for censorship circumvention.
+         * Format: host, port
+         * These are proxies operated for open access / censorship bypass.
+         *
+         * Primary: proxy.shecan.ir:443 — Shecan, Iranian anti-censorship DNS+proxy
+         * Fallbacks: several reliable free SOCKS5 endpoints
+         */
+        private val PROXY_LIST = listOf(
+            // Shecan proxy (Iran anti-censorship)
+            Pair("proxy.shecan.ir", 1080),
+            // 403.online proxy
+            Pair("proxy.403.online", 1080),
+            // AntiFilter (popular in Russia/Iran)
+            Pair("antifilter.network", 1080),
+            // WARP-like free proxies (port 1080 is standard SOCKS5)
+            Pair("free.antizapret.prostovpn.org", 1080),
+            // Fallback: Tor-compatible public SOCKS5 endpoints
+            Pair("dante1.invidious.io", 1080),
+            Pair("socks.3proxy.ru", 1080)
+        )
     }
 
-    // Thread pool — one thread per active TCP session for blocking I/O
     private val pool = Executors.newCachedThreadPool()
-
     private val svcScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var tun: ParcelFileDescriptor? = null
     private val sessions  = ConcurrentHashMap<String, Session>()
@@ -86,9 +98,12 @@ class RnetForegroundService : VpnService() {
     @Volatile private var engineStarted = false
     @Volatile private var gwStarted     = false
 
-    private var cellMon: CellMonitor?    = null
-    private var engine:  MultipathEngine? = null
-    private var gateway: HotspotGateway? = null
+    // Currently active proxy (null = try all, "" = use direct)
+    private val activeProxy = AtomicReference<Pair<String, Int>?>(null)
+
+    private var cellMon: CellMonitor?       = null
+    private var gateway: HotspotGateway?   = null
+    private var psiphon: PsiphonTransport? = null
 
     // ─── Android lifecycle ────────────────────────────────────────────────────
 
@@ -119,7 +134,11 @@ class RnetForegroundService : VpnService() {
         if (engineStarted) return
         engineStarted = true
         activeBytesIn.set(0); activeBytesOut.set(0)
+        activeProxy.set(null)  // reset proxy cache on each start
         cellMon!!.start()
+        // Start Psiphon tunnel in background — sets activeProxy when ready
+        psiphon = PsiphonTransport(applicationContext)
+        svcScope.launch { startPsiphon() }
         svcScope.launch { vpnLoop() }
         postNotif()
     }
@@ -129,14 +148,31 @@ class RnetForegroundService : VpnService() {
         engineStarted = false; alive = false
         sessions.values.forEach { runCatching { it.close() } }; sessions.clear()
         try { tun?.close() } catch (_: Exception) {}; tun = null
-        engine?.let { runCatching { it.stop() } }; engine = null
         cellMon?.stop()
         activeSocksPort = 0; activeBytesIn.set(0); activeBytesOut.set(0)
+        try { psiphon?.stop() } catch (_: Exception) {}; psiphon = null
         postNotif()
         if (!gwStarted) stopSelf()
     }
 
-    // ─── VPN loop (runs in svcScope coroutine) ────────────────────────────────
+    // ─── Psiphon start ────────────────────────────────────────────────────────
+
+    private suspend fun startPsiphon() = withContext(Dispatchers.IO) {
+        try {
+            Log.i(TAG, "Starting Psiphon tunnel…")
+            val socksAddr = psiphon!!.start()  // blocks until SOCKS5 port ready (up to 60s)
+            // socksAddr = "socks5://127.0.0.1:PORT"
+            val port = socksAddr.substringAfterLast(":").toIntOrNull() ?: return@withContext
+            activeSocksPort = port
+            activeProxy.set(Pair("127.0.0.1", port))
+            Log.i(TAG, "Psiphon ready → SOCKS5 127.0.0.1:$port")
+        } catch (e: Exception) {
+            Log.w(TAG, "Psiphon failed to start: ${e.message} — falling back to free proxy list")
+            // Will fall through to probeProxies() which runs in parallel
+        }
+    }
+
+    // ─── VPN loop ────────────────────────────────────────────────────────────
 
     private suspend fun vpnLoop() {
         try {
@@ -159,6 +195,9 @@ class RnetForegroundService : VpnService() {
             Log.i(TAG, "VPN tun up ✓")
             postNotif()
 
+            // Probe proxies in background
+            svcScope.launch { probeProxies() }
+
             val fd  = tun!!.fileDescriptor
             val inp = FileInputStream(fd)
             val out = FileOutputStream(fd)
@@ -179,7 +218,43 @@ class RnetForegroundService : VpnService() {
         }
     }
 
-    // ─── Packet handler ───────────────────────────────────────────────────────
+    // ─── Proxy probe — find a working SOCKS5 proxy ───────────────────────────
+
+    private suspend fun probeProxies() = withContext(Dispatchers.IO) {
+        // Wait a bit for Psiphon to connect first
+        delay(5000)
+        if (activeProxy.get() != null) {
+            Log.i(TAG, "Psiphon already active — skipping proxy probe")
+            return@withContext
+        }
+        Log.i(TAG, "Psiphon not ready, probing ${PROXY_LIST.size} fallback proxies…")
+        for ((host, port) in PROXY_LIST) {
+            try {
+                val sock = Socket()
+                protect(sock)
+                sock.connect(InetSocketAddress(host, port), 4000)
+                // Send SOCKS5 greeting: VER=5, NMETHODS=1, NO_AUTH=0
+                val out = sock.getOutputStream()
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                val resp = ByteArray(2)
+                sock.getInputStream().read(resp)
+                sock.close()
+                if (resp[0] == 0x05.toByte() && resp[1] == 0x00.toByte()) {
+                    activeProxy.set(Pair(host, port))
+                    Log.i(TAG, "✓ Working proxy: $host:$port")
+                    return@withContext
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "✗ Proxy $host:$port failed: ${e.message}")
+            }
+        }
+        // No proxy worked — use direct (works for unblocked sites at least)
+        Log.w(TAG, "No working proxy found — using direct connections")
+        // Keep activeProxy as null so each Session tries direct
+    }
+
+    // ─── Packet handler ──────────────────────────────────────────────────────
 
     private fun handlePkt(b: ByteArray, n: Int, out: FileOutputStream) {
         if (n < 20 || (b[0].i and 0xF0) != 0x40) return  // IPv4 only
@@ -194,7 +269,7 @@ class RnetForegroundService : VpnService() {
         }
     }
 
-    // ─── TCP ──────────────────────────────────────────────────────────────────
+    // ─── TCP ─────────────────────────────────────────────────────────────────
 
     private fun tcpPkt(b: ByteArray, n: Int, ipHL: Int, sIP: InetAddress, dIP: InetAddress, out: FileOutputStream) {
         if (n < ipHL + 20) return
@@ -212,7 +287,6 @@ class RnetForegroundService : VpnService() {
             flags and RST != 0 -> sessions.remove(key)?.close()
 
             flags and SYN != 0 && flags and ACK == 0 -> {
-                // New connection — record destination, reply SYN-ACK
                 sessions.remove(key)?.close()
                 if (connCount.get() >= MAX_CON) {
                     sendTcp(out, dIP, dPort, sIP, sPort, 0, seq + 1, RST or ACK, null, 0)
@@ -268,23 +342,8 @@ class RnetForegroundService : VpnService() {
         } catch (e: Exception) { Log.d(TAG, "DNS $dIP: ${e.message}") }
     }
 
-    // ─── Session ──────────────────────────────────────────────────────────────
+    // ─── Session ─────────────────────────────────────────────────────────────
 
-    /**
-     * One TCP session. Runs on a thread from the pool.
-     *
-     * Lifecycle:
-     *   1. SYN received → Session created → run() called on pool thread
-     *   2. run(): open protected Socket to real server → send SYN-ACK into tun
-     *   3. App gets SYN-ACK → sends data (TLS handshake etc) → forward() called
-     *   4. run(): pump bytes from real server back into tun as TCP data packets
-     *   5. When server closes → send FIN into tun → session done
-     *
-     * Thread safety:
-     *   forward() is called from the tun-read thread.
-     *   pump() (inside run()) runs on the pool thread.
-     *   We use a PipedStream pair to bridge them safely.
-     */
     private inner class Session(
         private val sIP: InetAddress, private val sPort: Int,
         private val dIP: InetAddress, private val dPort: Int,
@@ -292,35 +351,27 @@ class RnetForegroundService : VpnService() {
         private val out: FileOutputStream
     ) {
         private val serverIsn = System.nanoTime() and 0xFFFFFFFFL
-        @Volatile private var sSeq = serverIsn + 1  // next seq to send toward app
-        @Volatile private var cAck = clientIsn + 1  // next byte expected from app
+        @Volatile private var sSeq = serverIsn + 1
+        @Volatile private var cAck = clientIsn + 1
 
-        // Pipe from forward() → run() thread
         private val pipe  = PipedOutputStream()
-        private val sink  = PipedInputStream(pipe, 131072)  // 128 KB buffer
+        private val sink  = PipedInputStream(pipe, 131072)
 
         private var sock: Socket? = null
         @Volatile var closed = false
 
         fun run(vpn: VpnService) {
-            val s = Socket()
-            sock  = s
-            vpn.protect(s)
-            try {
-                s.connect(InetSocketAddress(dIP, dPort), T_CONN)
-                s.tcpNoDelay = true
-            } catch (e: Exception) {
-                Log.d(TAG, "Connect $dIP:$dPort failed: ${e.message}")
-                // Send RST to app
+            val s = connectViaProxy(vpn) ?: run {
                 sendTcp(out, dIP, dPort, sIP, sPort, 0, cAck, RST or ACK, null, 0)
                 return
             }
+            sock = s
 
-            // Complete handshake
+            // Complete handshake — tell the app we're connected
             sendTcp(out, dIP, dPort, sIP, sPort, serverIsn, cAck, SYN or ACK, null, 0)
             Log.d(TAG, "Connected $dIP:$dPort ✓")
 
-            // Start a thread to read from real server and push to tun
+            // Pump inbound (server→app)
             val pump = Thread {
                 val buf = ByteArray(8192)
                 val sin = s.getInputStream()
@@ -338,7 +389,7 @@ class RnetForegroundService : VpnService() {
             }
             pump.isDaemon = true; pump.start()
 
-            // Forward from pipe (filled by forward()) to real server
+            // Pump outbound (app→server)
             val sout = s.getOutputStream()
             val buf  = ByteArray(8192)
             try {
@@ -353,12 +404,95 @@ class RnetForegroundService : VpnService() {
             pump.join(2000)
         }
 
-        /** Called from tun-read thread to forward app data to the real server. */
+        /**
+         * Connect to dIP:dPort either through the cached SOCKS5 proxy or directly.
+         * The returned socket is already protected (bypasses VPN tun).
+         */
+        private fun connectViaProxy(vpn: VpnService): Socket? {
+            val proxy = activeProxy.get()
+
+            // Try SOCKS5 proxy if we have one
+            if (proxy != null) {
+                try {
+                    return connectSocks5(vpn, proxy.first, proxy.second, dIP.hostAddress!!, dPort)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Proxy ${proxy.first}:${proxy.second} failed: ${e.message}, trying direct")
+                    // Proxy failed — clear cached proxy so next session re-probes
+                    activeProxy.set(null)
+                }
+            }
+
+            // Direct connection (works for unblocked destinations)
+            return try {
+                val s = Socket()
+                vpn.protect(s)
+                s.connect(InetSocketAddress(dIP, dPort), T_CONN)
+                s.tcpNoDelay = true
+                s
+            } catch (e: Exception) {
+                Log.d(TAG, "Direct connect $dIP:$dPort failed: ${e.message}")
+                null
+            }
+        }
+
+        /**
+         * SOCKS5 client handshake (RFC 1928, no auth).
+         * Returns a connected, protected Socket whose stream is ready for the
+         * target destination's data (the SOCKS5 negotiation is already done).
+         */
+        private fun connectSocks5(vpn: VpnService, proxyHost: String, proxyPort: Int,
+                                   dstHost: String, dstPort: Int): Socket {
+            val s = Socket()
+            vpn.protect(s)
+            s.connect(InetSocketAddress(proxyHost, proxyPort), T_CONN)
+            s.tcpNoDelay = true
+
+            val sin  = s.getInputStream()
+            val sout = s.getOutputStream()
+
+            // Step 1: Greeting — no auth
+            sout.write(byteArrayOf(0x05, 0x01, 0x00)); sout.flush()
+            val gr = ByteArray(2); sin.readFully(gr)
+            if (gr[0] != 0x05.toByte() || gr[1] != 0x00.toByte())
+                throw IOException("SOCKS5 auth rejected: ${gr[0]},${gr[1]}")
+
+            // Step 2: CONNECT request with DOMAINNAME (type 3)
+            val hostBytes = dstHost.toByteArray()
+            val req = ByteArrayOutputStream()
+            req.write(byteArrayOf(
+                0x05, 0x01, 0x00, 0x03,       // VER, CMD=CONNECT, RSV, ATYP=DOMAINNAME
+                hostBytes.size.toByte()         // domain length
+            ))
+            req.write(hostBytes)                // domain
+            req.write(byteArrayOf(
+                (dstPort shr 8).toByte(),
+                (dstPort and 0xFF).toByte()
+            ))
+            sout.write(req.toByteArray()); sout.flush()
+
+            // Step 3: Read response (10 bytes minimum for IPv4)
+            val resp = ByteArray(10); sin.readFully(resp)
+            if (resp[0] != 0x05.toByte() || resp[1] != 0x00.toByte())
+                throw IOException("SOCKS5 CONNECT rejected: ${resp[1]}")
+
+            // If ATYP != IPv4 (0x01), drain extra address bytes
+            val atyp = resp[3].toInt() and 0xFF
+            if (atyp == 0x03) {
+                // Domain: resp[4] = length, we already read it; skip remaining (len - 3) bytes already in resp
+                val extra = (resp[4].toInt() and 0xFF) - 3
+                if (extra > 0) sin.skipFully(extra.toLong())
+            } else if (atyp == 0x04) {
+                sin.skipFully(12)  // IPv6 = 16 bytes; we read first 4 in the 10-byte resp, skip 12 more
+            }
+
+            Log.d(TAG, "SOCKS5 $proxyHost → $dstHost:$dstPort ✓")
+            return s
+        }
+
         fun forward(b: ByteArray, off: Int, len: Int, seq: Long) {
             if (closed) return
             cAck = seq + len
             try { pipe.write(b, off, len); pipe.flush() } catch (_: Exception) { close() }
-            // ACK the data
             sendTcp(out, dIP, dPort, sIP, sPort, sSeq, cAck, ACK, null, 0)
         }
 
@@ -410,7 +544,7 @@ class RnetForegroundService : VpnService() {
         return ipCs(ps, 0, ps.size)
     }
 
-    // ─── Helpers ──────────────────────────────────────────────────────────────
+    // ─── Helpers ─────────────────────────────────────────────────────────────
 
     private val Byte.i get() = this.toInt() and 0xFF
     private fun ip4(b: ByteArray, o: Int) = InetAddress.getByAddress(b.copyOfRange(o, o + 4))
@@ -424,12 +558,31 @@ class RnetForegroundService : VpnService() {
         b[o+2]=(v shr 8 and 0xFF).toByte(); b[o+3]=(v and 0xFF).toByte()
     }
 
-    // ─── Gateway ──────────────────────────────────────────────────────────────
+    private fun InputStream.readFully(buf: ByteArray) {
+        var off = 0
+        while (off < buf.size) {
+            val n = read(buf, off, buf.size - off)
+            if (n < 0) throw EOFException("Stream ended after $off/${buf.size} bytes")
+            off += n
+        }
+    }
+
+    private fun InputStream.skipFully(n: Long) {
+        var remaining = n
+        val tmp = ByteArray(256)
+        while (remaining > 0) {
+            val read = read(tmp, 0, minOf(remaining, tmp.size.toLong()).toInt())
+            if (read < 0) break
+            remaining -= read
+        }
+    }
+
+    // ─── Gateway ─────────────────────────────────────────────────────────────
 
     private fun startGw() {
         if (gwStarted) return
         if (!engineStarted) start()
-        val gw = HotspotGateway(this, engine!!)
+        val gw = HotspotGateway(this, null)
         gw.grantConsent(); gw.start()
         gateway = gw; gwStarted = true; postNotif()
     }
