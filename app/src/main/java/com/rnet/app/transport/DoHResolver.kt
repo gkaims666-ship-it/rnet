@@ -1,12 +1,13 @@
 package com.rnet.app.transport
 
 import android.util.Log
-import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URL
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.HttpsURLConnection
 
 /**
@@ -37,11 +38,46 @@ object DoHResolver {
         "https://dns.google/dns-query"
     )
 
+    // Thread pool for parallel DoH probes (audit fix #8)
+    private val dohPool = Executors.newCachedThreadPool { r ->
+        Thread(r, "doh-probe").also { it.isDaemon = true }
+    }
+
     /**
-     * Resolve a raw DNS query using DNS-over-HTTPS.
-     * @param query raw DNS query bytes (as received from tun fd)
-     * @param protect lambda that protect()-s a socket from the VPN tun (called before each TCP connect)
-     * @return raw DNS response bytes, or null on failure
+     * Resolve a raw DNS query using DNS-over-HTTPS — PARALLEL edition.
+     * All endpoints are probed simultaneously; whichever responds first wins.
+     * Worst-case latency = single endpoint timeout (5s), not 5×5s = 25s.
+     */
+    fun resolveParallel(query: ByteArray): ByteArray? {
+        val result = LinkedBlockingQueue<ByteArray>(1)
+        val futures = endpoints.map { url ->
+            dohPool.submit {
+                try {
+                    val conn = URL(url).openConnection() as HttpsURLConnection
+                    conn.requestMethod = "POST"
+                    conn.setRequestProperty("Content-Type", "application/dns-message")
+                    conn.setRequestProperty("Accept", "application/dns-message")
+                    conn.connectTimeout = TIMEOUT_MS
+                    conn.readTimeout    = TIMEOUT_MS
+                    conn.doOutput = true
+                    conn.outputStream.use { it.write(query) }
+                    if (conn.responseCode == 200) {
+                        val resp = conn.inputStream.use { it.readBytes() }
+                        if (resp.isNotEmpty()) result.offer(resp)
+                    }
+                    conn.disconnect()
+                } catch (e: Exception) {
+                    Log.d(TAG, "DoH $url failed: ${e.message}")
+                }
+            }
+        }
+        val answer = result.poll(TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+        futures.forEach { it.cancel(true) }
+        return answer
+    }
+
+    /**
+     * Sequential fallback resolve (kept for compatibility).
      */
     fun resolve(query: ByteArray, protect: ((java.net.Socket) -> Unit)? = null): ByteArray? {
         for (url in endpoints) {
