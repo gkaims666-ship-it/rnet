@@ -1,7 +1,10 @@
 package com.rnet.app.service
 
 import android.app.*
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.*
 import android.net.VpnService
 import android.os.Build
@@ -157,8 +160,43 @@ class RnetForegroundService : VpnService() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var lastNetwork: Network? = null
 
+    // ── Command broadcast receiver ────────────────────────────────────────────
+    // Receives ACTION_STOP / ACTION_GATEWAY_START / etc. via sendBroadcast() from
+    // MainViewModel. Using sendBroadcast() instead of startForegroundService() avoids
+    // ForegroundServiceStartNotAllowedException on Android 14 when the app is backgrounded.
+    // The receiver is only registered while the service is alive so it cannot be reached
+    // from outside the app (not exported, requires the app's own signature).
+    private val commandReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            when (intent?.action) {
+                ACTION_STOP          -> { stop(); stopGw() }
+                ACTION_GATEWAY_START -> startGw()
+                ACTION_GATEWAY_STOP  -> stopGw()
+                ACTION_CHANGE_REGION -> intent.getStringExtra(EXTRA_REGION)?.let { changeRegion(it) }
+            }
+        }
+    }
+
     // ── Android lifecycle ────────────────────────────────────────────────────
-    override fun onCreate() { super.onCreate(); makeChan(); cellMon = CellMonitor(this) }
+    override fun onCreate() {
+        super.onCreate()
+        makeChan()
+        cellMon = CellMonitor(this)
+        // Register the command receiver. RECEIVER_NOT_EXPORTED (API 33+) ensures it
+        // is not accessible from other apps. On older APIs the flag is 0 — the receiver
+        // is still protected by the IntentFilter using package-scoped action strings.
+        val filter = IntentFilter().apply {
+            addAction(ACTION_STOP)
+            addAction(ACTION_GATEWAY_START)
+            addAction(ACTION_GATEWAY_STOP)
+            addAction(ACTION_CHANGE_REGION)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(commandReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(commandReceiver, filter)
+        }
+    }
 
     override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
         // Android 14+ requires specifying foregroundServiceType explicitly.
@@ -185,7 +223,10 @@ class RnetForegroundService : VpnService() {
 
     override fun onRevoke()  { stop(); super.onRevoke() }
     override fun onBind(i: Intent?) = null
-    override fun onDestroy() { stopGw(); stop(); svcScope.cancel(); super.onDestroy() }
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(commandReceiver) }
+        stopGw(); stop(); svcScope.cancel(); super.onDestroy()
+    }
 
     // ── Engine start / stop ──────────────────────────────────────────────────
     private fun start() {

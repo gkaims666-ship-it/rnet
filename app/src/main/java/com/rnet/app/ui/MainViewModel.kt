@@ -92,30 +92,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleEngine(active: Boolean) {
         val ctx = getApplication<Application>().applicationContext
         if (active) {
+            // START: must use startForegroundService — this is always called while the
+            // app's activity is in the foreground (user just tapped the toggle), so
+            // ForegroundServiceStartNotAllowedException cannot fire here.
             val intent = Intent(ctx, RnetForegroundService::class.java).apply {
                 action = RnetForegroundService.ACTION_START
             }
             ctx.startForegroundService(intent)
         } else {
-            val intent = Intent(ctx, RnetForegroundService::class.java).apply {
-                action = RnetForegroundService.ACTION_STOP
-            }
-            // Android 8+ (API 26+): startService() throws IllegalStateException when
-            // the app is in the background. The service is already running as a foreground
-            // service, so startForegroundService() is correct for all interactions —
-            // the service receives the intent in onStartCommand() regardless of action.
-            ctx.startForegroundService(intent)
+            // STOP: use sendBroadcast() instead of startForegroundService().
+            // The app may be in the background when the user stops the engine (screen
+            // just dimmed, task-switched, etc.). On Android 14, startForegroundService()
+            // from background throws ForegroundServiceStartNotAllowedException; and
+            // startService() on API 26+ throws IllegalStateException from background.
+            // sendBroadcast() never throws — the service's commandReceiver handles it.
+            ctx.sendBroadcast(Intent(RnetForegroundService.ACTION_STOP).apply {
+                `package` = ctx.packageName
+            })
         }
         _ui.update { it.copy(engineActive = active) }
     }
 
     fun toggleGateway(active: Boolean) {
         val ctx = getApplication<Application>().applicationContext
-        val intent = Intent(ctx, RnetForegroundService::class.java).apply {
-            action = if (active) RnetForegroundService.ACTION_GATEWAY_START
-                     else        RnetForegroundService.ACTION_GATEWAY_STOP
-        }
-        ctx.startForegroundService(intent)
+        ctx.sendBroadcast(Intent(
+            if (active) RnetForegroundService.ACTION_GATEWAY_START
+            else        RnetForegroundService.ACTION_GATEWAY_STOP
+        ).apply { `package` = ctx.packageName })
         _ui.update { it.copy(gatewayActive = active) }
     }
 
@@ -182,7 +185,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 action = RnetForegroundService.ACTION_CHANGE_REGION
                 putExtra(RnetForegroundService.EXTRA_REGION, region)
             }
-            ctx.startForegroundService(intent)
+            ctx.sendBroadcast(Intent(RnetForegroundService.ACTION_CHANGE_REGION).apply {
+                `package` = ctx.packageName
+                putExtra(RnetForegroundService.EXTRA_REGION, region)
+            })
         }
     }
 }
