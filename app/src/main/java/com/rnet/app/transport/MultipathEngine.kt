@@ -43,6 +43,8 @@ class MultipathEngine(
         private const val MTU_FAIR    = 900    // RSRP -90 to -105
         private const val MTU_POOR    = 512    // RSRP < -105
         private const val HEADER_LEN  = 12     // session_id(4)+seq(4)+idx(1)+total(1)+len(2)
+        // Max pending FEC reassembly groups — evict oldest when exceeded to prevent OOM
+        private const val MAX_REASSEMBLY_ENTRIES = 256
     }
 
     private val fec = ReedSolomonFec(FEC_DATA, FEC_TOTAL - FEC_DATA)
@@ -53,7 +55,11 @@ class MultipathEngine(
     private val activePaths = ConcurrentHashMap<Network, DatagramSocket>()
 
     // Reassembly buffer: sessionId+seq → received shards array
+    // Bug fix: bounded to prevent OOM from dropped/unfinished FEC groups.
+    // Old entries are evicted when the map exceeds MAX_REASSEMBLY_ENTRIES.
     private val reassemblyBuf = ConcurrentHashMap<Long, Array<ByteArray?>>()
+    private val reassemblyOrder = java.util.LinkedList<Long>() // insertion order for eviction
+    private val reassemblyLock = Any()
 
     private val _inbound = MutableSharedFlow<ByteArray>(
         extraBufferCapacity = 64,
@@ -129,6 +135,11 @@ class MultipathEngine(
         }
         activePaths.values.forEach { runCatching { it.close() } }
         activePaths.clear()
+        // Free reassembly buffer memory on stop
+        synchronized(reassemblyLock) {
+            reassemblyBuf.clear()
+            reassemblyOrder.clear()
+        }
         scope.cancel()
     }
 
@@ -242,10 +253,30 @@ class MultipathEngine(
         val shardIdx   = bb.get().toInt() and 0xFF
         val totalShard = bb.get().toInt() and 0xFF
         val shardLen   = bb.short.toInt() and 0xFFFF
+
+        // Bug fix: validate shardIdx before array access — malformed/replayed packets
+        // with shardIdx >= totalShard would cause ArrayIndexOutOfBoundsException.
+        if (totalShard == 0 || shardIdx >= totalShard) return
+        if (HEADER_LEN + shardLen > frame.size) return   // truncated frame
         val shardData  = frame.copyOfRange(HEADER_LEN, HEADER_LEN + shardLen)
 
         val key = (sessId shl 32) or seq
-        val shards = reassemblyBuf.getOrPut(key) { arrayOfNulls(totalShard) }
+        // Bug fix: use synchronized block to keep reassemblyBuf + reassemblyOrder consistent,
+        // and evict oldest entry when the map grows beyond MAX_REASSEMBLY_ENTRIES to prevent OOM.
+        val shards = synchronized(reassemblyLock) {
+            reassemblyBuf.getOrPut(key) {
+                if (reassemblyBuf.size >= MAX_REASSEMBLY_ENTRIES) {
+                    // Evict the oldest pending group to cap memory usage
+                    val oldest = reassemblyOrder.pollFirst()
+                    if (oldest != null) reassemblyBuf.remove(oldest)
+                }
+                reassemblyOrder.addLast(key)
+                arrayOfNulls(totalShard)
+            }.also { existing ->
+                // Guard against size mismatch from duplicate/corrupt packets
+                if (existing.size != totalShard) return
+            }
+        }
         shards[shardIdx] = shardData
 
         // Attempt reconstruction once we have enough shards
@@ -256,7 +287,10 @@ class MultipathEngine(
                 val payload = shards.take(FEC_DATA)
                     .filterNotNull()
                     .fold(ByteArray(0)) { acc, s -> acc + s }
-                reassemblyBuf.remove(key)
+                synchronized(reassemblyLock) {
+                    reassemblyBuf.remove(key)
+                    reassemblyOrder.remove(key)
+                }
                 scope.launch { _inbound.emit(payload) }
             }
         }

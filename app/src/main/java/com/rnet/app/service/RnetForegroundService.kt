@@ -408,6 +408,10 @@ class RnetForegroundService : VpnService() {
         try { tun?.close() } catch (_: Exception) {}
         // Also interrupt the reader in case it's not in a blocking read right now
         readerThread?.interrupt()
+        // Bug fix: clear stale packets queued for the old tun fd. Without this, packets
+        // buffered during the network switch are written to the new tun fd, corrupting
+        // the byte stream of every live TCP session on the new interface.
+        writeQueue.clear()
     }
 
     // ── Tunnel warmup ────────────────────────────────────────────────────────
@@ -699,6 +703,16 @@ class RnetForegroundService : VpnService() {
             val fd  = newTun.fileDescriptor
             val inp = FileInputStream(fd)
             val out = FileOutputStream(fd)
+
+            // Bug fix: stop any writer from a previous tun build before starting a new one.
+            // Without this, on a network-change rebuild two writer threads drain the same
+            // writeQueue concurrently — packets are delivered out of order and to stale fds.
+            writerThread?.let { prev ->
+                prev.interrupt()
+                // Brief join (non-blocking on IO thread) — it exits quickly via the
+                // `tun !== newTun` check now that tun has been swapped above.
+                try { prev.join(500) } catch (_: InterruptedException) {}
+            }
 
             // Writer thread
             // Crash fix: check that the fd is still the one we opened (tun === newTun)

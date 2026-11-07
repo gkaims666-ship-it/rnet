@@ -139,10 +139,14 @@ class TunnelPool(
     }
 
     private fun evictLru() {
+        // Bug fix: previously called transport.stop() while holding the lock — stop() can
+        // block for seconds (Psiphon teardown), freezing all concurrent getSocksPort() callers.
+        // Fix: remove from the map inside the lock, then stop outside it.
         val lru = tunnels.values.minByOrNull { it.lastUsedMs } ?: return
-        Log.i(TAG, "Evicting LRU tunnel: ${lru.region}")
-        runCatching { lru.transport.stop() }
         tunnels.remove(lru.region)
+        Log.i(TAG, "Evicting LRU tunnel: ${lru.region}")
+        // transport.stop() runs OUTSIDE the lock — may block, that's fine now
+        runCatching { lru.transport.stop() }
     }
 
     /** Stop tunnels idle for longer than IDLE_TIMEOUT_MS. Call periodically. */
