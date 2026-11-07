@@ -160,9 +160,13 @@ class SmartRouter(
         if (now - fe.firstMs > FAIL_WINDOW_MS) {
             failMap[key] = FailEntry(1, now)
         } else {
-            fe.count++
-            if (fe.count >= FAIL_THRESHOLD) {
-                Log.w(TAG, "Circuit open for $key (${fe.count} failures)")
+            // Bug fix: `fe.count++` is a non-atomic read-modify-write on a plain `var`
+            // field retrieved from a ConcurrentHashMap — concurrent callers race.
+            // Use replace() so the update is conditional on the entry not changing.
+            val updated = fe.copy(count = fe.count + 1)
+            failMap.replace(key, fe, updated)
+            if (updated.count >= FAIL_THRESHOLD) {
+                Log.w(TAG, "Circuit open for $key (${updated.count} failures)")
             }
         }
     }
@@ -198,7 +202,10 @@ class SmartRouter(
         val now = System.currentTimeMillis()
         val fe = regionFailMap.getOrPut(region) { FailEntry(0, now) }
         if (now - fe.firstMs > FAIL_WINDOW_MS) regionFailMap[region] = FailEntry(1, now)
-        else fe.count++
+        else {
+            // Bug fix: same non-atomic race as recordFailure — use replace().
+            regionFailMap.replace(region, fe, fe.copy(count = fe.count + 1))
+        }
     }
 
     private fun isRegionBlacklisted(region: String): Boolean {
@@ -353,7 +360,14 @@ class SmartRouter(
         s.tcpNoDelay = true
         s.keepAlive = true
         s.soTimeout = PROBE_TIMEOUT
-        s.connect(InetSocketAddress(proxyHost, proxyPort), PROBE_TIMEOUT)
+        // Bug fix: if connect() throws, the socket was created and must be closed.
+        // Previously an exception here would leak the file descriptor.
+        try {
+            s.connect(InetSocketAddress(proxyHost, proxyPort), PROBE_TIMEOUT)
+        } catch (e: Exception) {
+            runCatching { s.close() }
+            return null
+        }
         val din  = java.io.DataInputStream(s.getInputStream())
         val sout = s.getOutputStream()
 

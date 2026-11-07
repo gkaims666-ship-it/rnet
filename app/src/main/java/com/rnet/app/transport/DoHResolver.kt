@@ -208,15 +208,18 @@ object DoHResolver {
         )
         for (addr in upstreams) {
             try {
-                val sock = DatagramSocket()
-                protect(sock)
-                sock.soTimeout = 3000
-                sock.send(DatagramPacket(query, query.size, addr))
-                val rb = ByteArray(2048)
-                val rp = DatagramPacket(rb, rb.size)
-                sock.receive(rp)
-                sock.close()
-                return rb.copyOf(rp.length)
+                // Bug fix: use `use{}` so the socket is always closed, even
+                // when sock.receive() throws (e.g. SocketTimeoutException).
+                // Previously the socket leaked on any exception after creation.
+                DatagramSocket().use { sock ->
+                    protect(sock)
+                    sock.soTimeout = 3000
+                    sock.send(DatagramPacket(query, query.size, addr))
+                    val rb = ByteArray(2048)
+                    val rp = DatagramPacket(rb, rb.size)
+                    sock.receive(rp)
+                    return rb.copyOf(rp.length)
+                }
             } catch (_: Exception) {}
         }
         return null

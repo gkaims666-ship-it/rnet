@@ -109,7 +109,8 @@ class EndpointRouter(private val configs: List<EndpointConfig>) {
         if (totalWeight <= 0.0) {
             return active.maxByOrNull { it.config.priority }!!.config.address
         }
-        var pick = Math.random() * totalWeight
+        // Bug fix: Math.random() is not thread-safe; use kotlin.random.Random which is.
+        var pick = kotlin.random.Random.nextDouble() * totalWeight
         for (s in active.sortedByDescending { it.goodputBytesPerMs + it.config.priority }) {
             pick -= s.goodputBytesPerMs + s.config.priority
             if (pick <= 0) return s.config.address
