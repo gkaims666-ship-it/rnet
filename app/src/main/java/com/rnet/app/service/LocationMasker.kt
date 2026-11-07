@@ -63,7 +63,7 @@ object LocationMasker {
      */
     fun start(context: Context, region: String): String? {
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        val (lat, lon, city) = REGION_COORDS[region] ?: REGION_COORDS["NL"]!!
+        val (lat, lon, city) = REGION_COORDS[region] ?: REGION_COORDS[""]!!
 
         return try {
             // Add mock provider — will throw SecurityException if not enabled
@@ -105,7 +105,7 @@ object LocationMasker {
     fun push(context: Context, region: String) {
         if (!active) return
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        val (lat, lon, _) = REGION_COORDS[region] ?: REGION_COORDS["NL"]!!
+        val (lat, lon, _) = REGION_COORDS[region] ?: REGION_COORDS[""]!!
         try { pushLocation(lm, lat, lon) } catch (_: Exception) {}
     }
 

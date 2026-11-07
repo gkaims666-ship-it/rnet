@@ -88,12 +88,13 @@ class TunnelPool(
     // ── Internal ──────────────────────────────────────────────────────────────
 
     private fun startTunnel(region: String): Int {
-        val entry: TunnelEntry = lock.withLock {
-            // Double-check after acquiring lock
-            tunnels[region]?.let {
-                if (it.ready) return it.port  // already ready
-                return it.startLatch.await(START_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                    .let { ok -> if (ok && it.ready) it.port else -1 }
+        val entry: TunnelEntry? = lock.withLock {
+            // Double-check after acquiring lock — if already started/starting, don't start again
+            tunnels[region]?.let { existing ->
+                if (existing.ready) return existing.port   // already ready
+                // Startup in progress — release lock and wait on the latch
+                // (can't return from inside withLock with a suspend, so null means "wait outside")
+                return@withLock null
             }
             // Evict LRU tunnel if at capacity
             if (tunnels.size >= MAX_TUNNELS) evictLru()
@@ -105,7 +106,17 @@ class TunnelPool(
             e   // return the entry; lock is released immediately after
         }
 
-        // Bug fix #5: transport.start() (up to 60s) runs OUTSIDE the lock
+        // If another startup was already in progress, entry is null — wait on its latch
+        if (entry == null) {
+            val existing = tunnels[region] ?: return -1
+            if (existing.startLatch.await(START_TIMEOUT_MS, TimeUnit.MILLISECONDS) && existing.ready) {
+                existing.lastUsedMs = System.currentTimeMillis()
+                return existing.port
+            }
+            return -1
+        }
+
+        // transport.start() (up to 60s) runs OUTSIDE the lock
         return try {
             val addr = entry.transport.start()
             val port = addr.substringAfterLast(":").toIntOrNull() ?: -1

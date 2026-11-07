@@ -68,8 +68,9 @@ class ConnectionPool(
                 runCatching { pooled.socket.close() }; continue
             }
             Log.d(TAG, "Pre-warmed socket acquired for $key")
-            // Trigger background replenishment
-            scheduleWarmup(dstIP, dstPort, key)
+            // Trigger background replenishment — only if not already warming up
+            // (prevents infinite recursion: warmup→connect→acquire→warmup→…)
+            if (warmingUp[key] != true) scheduleWarmup(dstIP, dstPort, key)
             return pooled.socket
         }
     }

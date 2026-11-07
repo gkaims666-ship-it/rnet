@@ -1110,8 +1110,11 @@ class RnetForegroundService : VpnService() {
     private fun notif(): Notification {
         val tap  = PendingIntent.getActivity(this, 0,
             Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        val stop = PendingIntent.getService(this, 1,
-            Intent(this, RnetForegroundService::class.java).apply { action = ACTION_STOP },
+        // STOP from notification: use getBroadcast (not getService) so it routes through
+        // commandReceiver. The notification shade is a background context — getService() would
+        // throw ForegroundServiceStartNotAllowedException on Android 14.
+        val stop = PendingIntent.getBroadcast(this, 1,
+            Intent(ACTION_STOP).apply { `package` = packageName },
             PendingIntent.FLAG_IMMUTABLE)
         val text = when (connectionPhase) {
             ConnectionPhase.IDLE          -> getString(R.string.vpn_status_connecting)

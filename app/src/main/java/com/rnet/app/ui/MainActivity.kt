@@ -166,19 +166,37 @@ fun RnetDashboard(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = stringResource(R.string.app_name),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 2.sp
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Shield,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.5.sp,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
                 },
                 actions = {
                     IconButton(onClick = onFaqClick) {
                         Icon(
                             imageVector = Icons.Filled.Info,
                             contentDescription = stringResource(R.string.faq_button),
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 },
@@ -195,218 +213,248 @@ fun RnetDashboard(
                 .padding(padding)
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // ---- Main engine toggle ----
-            EngineToggleCard(uiState, onEngineToggle)
+            Spacer(Modifier.height(4.dp))
+            EngineHeroCard(uiState, onEngineToggle)
 
-            // ---- Live connection status (shown when active) ----
             if (uiState.engineActive) {
                 ConnectionStatusCard(uiState)
             }
 
-            // ---- Exit region picker ----
             RegionPickerCard(
-                selectedRegion   = uiState.exitRegion,
-                onSelect         = onRegionChange,
-                engineActive     = uiState.engineActive,
-                connectionPhase  = uiState.connectionPhase,
-                proxyLabel       = uiState.proxyLabel
+                selectedRegion  = uiState.exitRegion,
+                onSelect        = onRegionChange,
+                engineActive    = uiState.engineActive,
+                connectionPhase = uiState.connectionPhase,
+                proxyLabel      = uiState.proxyLabel
             )
 
-            // ---- Resilient Core opt-in (Psiphon decentralized routing) ----
             ResilientCoreCard(uiState.useResilientCore, onResilientCoreToggle)
 
-            // ---- Telemetry widget ----
             TelemetryCard(uiState)
 
-            // ---- Hotspot gateway (requires consent) ----
             GatewayCard(uiState, onGatewayToggle)
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(16.dp))
         }
     }
 }
 
-@Composable
-private fun CardIconBadge(icon: ImageVector, tint: Color, bgColor: Color) {
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .clip(MaterialTheme.shapes.small)
-            .background(bgColor),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = tint,
-            modifier = Modifier.size(22.dp)
-        )
-    }
-}
+// ── Hero engine card ─────────────────────────────────────────────────────────
 
 @Composable
-private fun CardHeader(
-    icon: ImageVector,
-    title: String,
-    iconTint: Color = MaterialTheme.colorScheme.primary,
-    iconBg: Color = MaterialTheme.colorScheme.primaryContainer
-) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        CardIconBadge(icon = icon, tint = iconTint, bgColor = iconBg)
-        Spacer(Modifier.width(12.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-    }
-}
-
-@Composable
-private fun EngineToggleCard(state: UiState, onToggle: (Boolean) -> Unit) {
+private fun EngineHeroCard(state: UiState, onToggle: (Boolean) -> Unit) {
     val active = state.engineActive
-    val cardColor by animateColorAsState(
-        targetValue = if (active) Color(0xFF1A0A2E) else MaterialTheme.colorScheme.surface,
-        animationSpec = tween(durationMillis = 400), label = "engineCard"
+
+    val bgColor by animateColorAsState(
+        targetValue = if (active) Color(0xFF130826) else MaterialTheme.colorScheme.surface,
+        animationSpec = tween(500), label = "heroBg"
     )
-    val borderColor by animateColorAsState(
-        targetValue = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                      else Color.Transparent,
-        animationSpec = tween(durationMillis = 400), label = "engineBorder"
+    val borderAlpha by animateColorAsState(
+        targetValue = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                      else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+        animationSpec = tween(500), label = "heroBorder"
     )
-    // Pulsing dot for FINDING_PROXY phase
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 1f, targetValue = 0.2f,
+
+    val infiniteTransition = rememberInfiniteTransition(label = "heroPulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.9f, targetValue = 1.1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
+            animation = tween(1200, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
-        ), label = "pulseAlpha"
+        ), label = "heroScale"
     )
-    val isFinding = state.connectionPhase == ConnectionPhase.FINDING_PROXY ||
-                    state.connectionPhase == ConnectionPhase.STARTING
+    val isTransitioning = active && state.connectionPhase != ConnectionPhase.ACTIVE
+
     Card(
-        modifier = Modifier.fillMaxWidth().border(1.dp, borderColor, MaterialTheme.shapes.medium),
-        colors = CardDefaults.cardColors(containerColor = cardColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, borderAlpha, MaterialTheme.shapes.large),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = bgColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (active) 6.dp else 2.dp)
     ) {
         Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            modifier = Modifier
+                .padding(horizontal = 20.dp, vertical = 20.dp)
+                .fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                CardHeader(
-                    icon = Icons.Filled.Security,
-                    title = stringResource(R.string.engine_title),
-                    iconTint = if (active) MaterialTheme.colorScheme.primary
+            // Left side: status indicator + text
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                // Animated status orb
+                Box(
+                    modifier = Modifier
+                        .size(if (active && isTransitioning) (44 * pulseScale).dp else 44.dp)
+                        .clip(MaterialTheme.shapes.medium)
+                        .background(
+                            if (active) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Security,
+                        contentDescription = null,
+                        tint = if (active) MaterialTheme.colorScheme.primary
                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                    iconBg = if (active) MaterialTheme.colorScheme.primaryContainer
-                             else MaterialTheme.colorScheme.surfaceVariant
-                )
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (active) {
-                        val dotColor = when (state.connectionPhase) {
-                            ConnectionPhase.ACTIVE        -> Color(0xFF4CAF50)
-                            ConnectionPhase.FINDING_PROXY -> Color(0xFFFFB74D)
-                            else                                       -> Color(0xFFB39DDB)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(MaterialTheme.shapes.extraSmall)
-                                .background(dotColor)
-                                .then(if (isFinding) Modifier.alpha(pulseAlpha) else Modifier)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                    }
-                    val statusText = when {
-                        !active -> stringResource(R.string.engine_status_inactive)
-                        state.connectionPhase == ConnectionPhase.FINDING_PROXY ->
-                            stringResource(R.string.vpn_status_starting_tunnel)
-                        state.connectionPhase == ConnectionPhase.ACTIVE ->
-                            stringResource(R.string.engine_status_active)
-                        else -> stringResource(R.string.vpn_status_connecting)
-                    }
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (active) Color(0xFF81C784)
-                                else MaterialTheme.colorScheme.onSurfaceVariant
+                        modifier = Modifier.size(24.dp)
                     )
                 }
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = stringResource(R.string.engine_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    StatusPill(state)
+                }
             }
-            Switch(checked = active, onCheckedChange = onToggle)
+            // Right side: toggle switch
+            Switch(
+                checked = active,
+                onCheckedChange = onToggle,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor   = MaterialTheme.colorScheme.onPrimary,
+                    checkedTrackColor   = MaterialTheme.colorScheme.primary,
+                    uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            )
         }
     }
 }
+
+@Composable
+private fun StatusPill(state: UiState) {
+    val active = state.engineActive
+    val infiniteTransition = rememberInfiniteTransition(label = "pillPulse")
+    val dotAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f, targetValue = 0.25f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(700, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ), label = "dotAlpha"
+    )
+    val isAnimating = active && state.connectionPhase != ConnectionPhase.ACTIVE
+
+    val dotColor = when {
+        !active -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+        state.connectionPhase == ConnectionPhase.ACTIVE -> Color(0xFF4CAF50)
+        else -> Color(0xFFFFB74D)
+    }
+    val label = when {
+        !active -> stringResource(R.string.engine_status_inactive)
+        state.connectionPhase == ConnectionPhase.ACTIVE -> stringResource(R.string.engine_status_active)
+        state.connectionPhase == ConnectionPhase.FINDING_PROXY -> stringResource(R.string.vpn_status_starting_tunnel)
+        else -> stringResource(R.string.vpn_status_connecting)
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(MaterialTheme.shapes.extraSmall)
+                .background(dotColor)
+                .then(if (isAnimating) Modifier.alpha(dotAlpha) else Modifier)
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (active) Color(0xFF81C784) else MaterialTheme.colorScheme.onSurfaceVariant,
+            letterSpacing = 0.sp
+        )
+    }
+}
+
+// ── Connection status card ───────────────────────────────────────────────────
 
 @Composable
 private fun ConnectionStatusCard(state: UiState) {
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0718)),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            CardHeader(
-                icon = Icons.Filled.Shield,
-                title = "Connection",
-                iconTint = Color(0xFF9C64D6),
-                iconBg = Color(0xFF1A0A2E)
-            )
-            Spacer(Modifier.height(12.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-            Spacer(Modifier.height(12.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // Circumvention transport
-                MetricRow(
-                    label = "Circumvention",
-                    value = state.proxyLabel,
-                    valueColor = when {
-                        state.proxyLabel.startsWith("Psiphon") -> Color(0xFF81C784)
-                        state.proxyLabel == "Direct"           -> Color(0xFFFFB74D)
-                        else                                   -> Color(0xFFB39DDB)
-                    }
-                )
-                // Location masking — shows exit country flag + code
-                if (state.exitRegion.isNotEmpty()) {
-                    val regionFlag = regionFlag(state.exitRegion)
-                    MetricRow(
-                        label = "Location",
-                        value = "$regionFlag ${state.exitRegion}",
-                        valueColor = Color(0xFF80DEEA)
-                    )
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(Color(0xFF1A0A2E)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Filled.Shield, null,
+                        tint = Color(0xFF9C64D6), modifier = Modifier.size(20.dp))
                 }
-                // Active TCP sessions
-                MetricRow(
-                    label = "Active Sessions",
-                    value = state.activeSessionCount.toString(),
-                    valueColor = if (state.activeSessionCount > 0) Color(0xFFCE93D8)
-                                 else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                // DNS protection
-                MetricRow(
-                    label = "DNS Protection",
-                    value = "DoH (Cloudflare)",
-                    valueColor = Color(0xFF81C784)
-                )
-                // Data
-                MetricRow(
-                    label = stringResource(R.string.metric_bytes_in),
-                    value = formatBytes(state.totalBytesIn)
-                )
-                MetricRow(
-                    label = stringResource(R.string.metric_bytes_out),
-                    value = formatBytes(state.totalBytesOut)
-                )
+                Spacer(Modifier.width(12.dp))
+                Text("Connection",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface)
+            }
+
+            Spacer(Modifier.height(14.dp))
+            HorizontalDivider(color = Color(0xFF2E2040))
+            Spacer(Modifier.height(14.dp))
+
+            // Traffic row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                TrafficStat(label = "↓ IN",  value = formatBytes(state.totalBytesIn),  color = Color(0xFF80DEEA))
+                VerticalDivider(modifier = Modifier.height(32.dp), color = Color(0xFF2E2040))
+                TrafficStat(label = "↑ OUT", value = formatBytes(state.totalBytesOut), color = Color(0xFFCE93D8))
+                VerticalDivider(modifier = Modifier.height(32.dp), color = Color(0xFF2E2040))
+                TrafficStat(label = "Sessions", value = state.activeSessionCount.toString(), color = Color(0xFFB39DDB))
+            }
+
+            Spacer(Modifier.height(14.dp))
+            HorizontalDivider(color = Color(0xFF2E2040))
+            Spacer(Modifier.height(12.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                MetricRow("Tunnel", state.proxyLabel,
+                    valueColor = when {
+                        state.proxyLabel.startsWith("Smart") -> Color(0xFF81C784)
+                        state.proxyLabel == "Direct" -> Color(0xFFFFB74D)
+                        else -> Color(0xFFB39DDB)
+                    })
+                if (state.exitRegion.isNotEmpty()) {
+                    MetricRow("Location", "${regionFlag(state.exitRegion)}  ${state.exitRegion}",
+                        valueColor = Color(0xFF80DEEA))
+                }
+                MetricRow("DNS", "DoH · Cloudflare", valueColor = Color(0xFF81C784))
+                if (state.routeCacheSize > 0 || state.pooledSockets > 0) {
+                    MetricRow("Route cache", "${state.routeCacheSize} dest · ${state.pooledSockets} warm",
+                        valueColor = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun TrafficStat(label: String, value: String, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = color)
+        Spacer(Modifier.height(2.dp))
+        Text(label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -418,7 +466,7 @@ private val ALL_REGIONS = listOf(
     RegionInfo("NO", "Oslo",       "No content blocking"),
     RegionInfo("SE", "Stockholm",  "No content blocking"),
     RegionInfo("FI", "Helsinki",   "No content blocking"),
-    RegionInfo("CH", "Zurich",     "Strong legal protections, neutral"),
+    RegionInfo("CH", "Zurich",     "Strong legal protections"),
     RegionInfo("DE", "Berlin",     "No state filtering"),
     RegionInfo("NL", "Amsterdam",  "No state filtering"),
     RegionInfo("AT", "Vienna",     "No state filtering"),
@@ -440,11 +488,8 @@ private fun RegionPickerCard(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val current = ALL_REGIONS.find { it.code == selectedRegion } ?: ALL_REGIONS[0]
-
-    // Detect "switching" state: engine is active and proxy label shows the switch in progress
     val isSwitching = engineActive && proxyLabel.startsWith("Switching")
 
-    // Pulsing animation for the switch-in-progress indicator
     val infiniteTransition = rememberInfiniteTransition(label = "switchPulse")
     val switchAlpha by infiniteTransition.animateFloat(
         initialValue = 1f, targetValue = 0.3f,
@@ -456,70 +501,71 @@ private fun RegionPickerCard(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF0D0718)),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(18.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                CardHeader(
-                    icon = Icons.Filled.Language,
-                    title = "Exit Country",
-                    iconTint = Color(0xFF80DEEA),
-                    iconBg = Color(0xFF0A1A1E)
-                )
-                // Live status badge — shows only when connected
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier.size(36.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(Color(0xFF0A1A1E)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.Language, null,
+                            tint = Color(0xFF80DEEA), modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text("Exit Country",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface)
+                }
                 if (engineActive) {
                     if (isSwitching) {
-                        Text(
-                            text = "• Switching…",
+                        Text("● Switching…",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFFFFB74D).copy(alpha = switchAlpha),
-                            fontWeight = FontWeight.Medium
-                        )
+                            fontWeight = FontWeight.Medium)
                     } else if (connectionPhase == ConnectionPhase.ACTIVE) {
-                        Text(
-                            text = "• Live",
+                        Text("● Live",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFF4CAF50),
-                            fontWeight = FontWeight.Medium
-                        )
+                            fontWeight = FontWeight.Medium)
                     }
                 }
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
             Spacer(Modifier.height(12.dp))
 
-            // Currently selected country button
             OutlinedButton(
                 onClick = { expanded = true },
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = Color(0xFF80DEEA)
-                ),
-                border = BorderStroke(1.dp, Color(0xFF80DEEA).copy(alpha = 0.5f))
+                shape = MaterialTheme.shapes.medium,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF80DEEA)),
+                border = BorderStroke(1.dp, Color(0xFF80DEEA).copy(alpha = 0.4f))
             ) {
                 Text(
                     text = "${regionFlag(current.code)}  ${current.code}  —  ${current.city}",
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
                 )
-                Spacer(Modifier.weight(1f))
-                Icon(Icons.Filled.ExpandMore, contentDescription = null,
-                    tint = Color(0xFF80DEEA))
+                Icon(Icons.Filled.ExpandMore, null, tint = Color(0xFF80DEEA),
+                    modifier = Modifier.size(18.dp))
             }
 
-            // Dropdown
             DropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                modifier = Modifier
-                    .fillMaxWidth(0.92f)
-                    .background(Color(0xFF130924))
+                modifier = Modifier.fillMaxWidth(0.92f).background(Color(0xFF130924))
             ) {
                 ALL_REGIONS.forEach { region ->
                     val isSelected = region.code == selectedRegion
@@ -529,72 +575,85 @@ private fun RegionPickerCard(
                                 Text(
                                     text = "${regionFlag(region.code)}  ${region.code}  —  ${region.city}",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = if (isSelected) Color(0xFF80DEEA)
-                                            else MaterialTheme.colorScheme.onSurface,
+                                    color = if (isSelected) Color(0xFF80DEEA) else MaterialTheme.colorScheme.onSurface,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                 )
-                                Text(
-                                    text = region.note,
+                                Text(text = region.note,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f))
                             }
                         },
-                        onClick = {
-                            onSelect(region.code)
-                            expanded = false
-                        },
+                        onClick = { onSelect(region.code); expanded = false },
                         leadingIcon = if (isSelected) ({
-                            Icon(Icons.Filled.Check, contentDescription = null,
+                            Icon(Icons.Filled.Check, null,
                                 tint = Color(0xFF80DEEA), modifier = Modifier.size(16.dp))
                         }) else null
                     )
                 }
             }
 
-            // Contextual hint — no longer says "restart required"
             if (engineActive) {
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 Text(
-                    text = if (isSwitching) "Reconnecting new exit node…"
-                           else "Changes apply instantly — no disconnect needed",
+                    text = if (isSwitching) "● Reconnecting new exit node…"
+                           else "Changes apply instantly — no disconnect",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (isSwitching) Color(0xFFFFB74D).copy(alpha = 0.8f)
-                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                 )
             }
         }
     }
 }
 
+// ── Resilient Core card ───────────────────────────────────────────────────────
+
 @Composable
 private fun ResilientCoreCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    val bgColor by animateColorAsState(
+        targetValue = if (enabled) Color(0xFF130826) else MaterialTheme.colorScheme.surface,
+        animationSpec = tween(400), label = "rcBg"
+    )
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = bgColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(18.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    CardHeader(
-                        icon = Icons.Filled.Hub,
-                        title = stringResource(R.string.resilient_core_title),
-                        iconTint = if (enabled) Color(0xFFCE93D8)
-                                   else MaterialTheme.colorScheme.onSurfaceVariant,
-                        iconBg = if (enabled) Color(0xFF2D0845)
-                                 else MaterialTheme.colorScheme.surfaceVariant
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier.size(36.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(if (enabled) Color(0xFF2D0845) else MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.Hub, null,
+                            tint = if (enabled) Color(0xFFCE93D8) else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text(stringResource(R.string.resilient_core_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface)
                 }
-                Switch(checked = enabled, onCheckedChange = onToggle)
+                Switch(
+                    checked = enabled, onCheckedChange = onToggle,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                        checkedTrackColor = Color(0xFFCE93D8)
+                    )
+                )
             }
-            Spacer(modifier = Modifier.height(10.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+            Spacer(Modifier.height(10.dp))
             Text(
                 text = stringResource(R.string.resilient_core_disclosure),
                 style = MaterialTheme.typography.bodySmall,
@@ -605,37 +664,50 @@ private fun ResilientCoreCard(enabled: Boolean, onToggle: (Boolean) -> Unit) {
     }
 }
 
+// ── Telemetry card ───────────────────────────────────────────────────────────
+
 @Composable
 private fun TelemetryCard(state: UiState) {
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            CardHeader(
-                icon = Icons.Filled.SignalCellularAlt,
-                title = stringResource(R.string.telemetry_title),
-                iconTint = Color(0xFFB39DDB),
-                iconBg = Color(0xFF1E0D35)
-            )
-            Spacer(Modifier.height(12.dp))
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier.size(36.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(Color(0xFF1E0D35)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Filled.SignalCellularAlt, null,
+                        tint = Color(0xFFB39DDB), modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Text(stringResource(R.string.telemetry_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface)
+            }
+            Spacer(Modifier.height(14.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
             Spacer(Modifier.height(12.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                MetricRow(
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                MetricRowBar(
                     label = stringResource(R.string.metric_snr),
                     value = "%.0f%%".format(state.snr),
-                    valueColor = signalColor(state.snr / 100f)
+                    fraction = state.snr / 100f
                 )
-                MetricRow(
+                MetricRowBar(
                     label = stringResource(R.string.metric_pdr),
                     value = "%.1f%%".format(state.packetDeliveryRate * 100f),
-                    valueColor = signalColor(state.packetDeliveryRate)
+                    fraction = state.packetDeliveryRate
                 )
                 MetricRow(
                     label = stringResource(R.string.metric_technology),
-                    value = if (state.bandMhz > 0) "${state.technology} ${state.bandMhz} MHz"
+                    value = if (state.bandMhz > 0) "${state.technology} · ${state.bandMhz} MHz"
                             else state.technology
                 )
                 MetricRow(
@@ -647,65 +719,111 @@ private fun TelemetryCard(state: UiState) {
     }
 }
 
-private fun signalColor(ratio: Float): Color = when {
-    ratio >= 0.7f -> Color(0xFF81C784)   // green — good
-    ratio >= 0.4f -> Color(0xFFFFB74D)   // amber — mediocre
-    else          -> Color(0xFFEF9A9A)   // red — poor
+@Composable
+private fun MetricRowBar(label: String, value: String, fraction: Float) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = signalColor(fraction))
+        }
+        Spacer(Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(MaterialTheme.shapes.extraSmall)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                    .fillMaxHeight()
+                    .background(signalColor(fraction))
+            )
+        }
+    }
 }
+
+// ── Gateway card ─────────────────────────────────────────────────────────────
 
 @Composable
 private fun GatewayCard(state: UiState, onToggle: (Boolean) -> Unit) {
+    val bgColor by animateColorAsState(
+        targetValue = if (state.gatewayActive) Color(0xFF130826) else MaterialTheme.colorScheme.surface,
+        animationSpec = tween(400), label = "gwBg"
+    )
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = bgColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(18.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    CardHeader(
-                        icon = Icons.Filled.WifiTethering,
-                        title = stringResource(R.string.gateway_title),
-                        iconTint = if (state.gatewayActive) Color(0xFFCE93D8)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier.size(36.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (state.gatewayActive) Color(0xFF2D0845)
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.WifiTethering, null,
+                            tint = if (state.gatewayActive) Color(0xFFCE93D8)
                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                        iconBg = if (state.gatewayActive) Color(0xFF2D0845)
-                                 else MaterialTheme.colorScheme.surfaceVariant
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.gateway_subtitle),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                            modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(stringResource(R.string.gateway_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.gateway_subtitle),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
-                Switch(checked = state.gatewayActive, onCheckedChange = onToggle)
+                Switch(
+                    checked = state.gatewayActive, onCheckedChange = onToggle,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                        checkedTrackColor = Color(0xFFCE93D8)
+                    )
+                )
             }
             if (!state.gatewayConsentGranted) {
                 Spacer(Modifier.height(10.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary,
-                        modifier = Modifier.size(14.dp)
-                    )
+                    Icon(Icons.Filled.Info, null,
+                        tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(13.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = stringResource(R.string.gateway_consent_required),
+                    Text(stringResource(R.string.gateway_consent_required),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
+                        color = MaterialTheme.colorScheme.tertiary)
                 }
             }
         }
     }
 }
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
 
 @Composable
 private fun MetricRow(
@@ -718,18 +836,20 @@ private fun MetricRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
+        Text(label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value,
+            style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
-            color = valueColor
-        )
+            color = valueColor)
     }
+}
+
+private fun signalColor(ratio: Float): Color = when {
+    ratio >= 0.7f -> Color(0xFF81C784)
+    ratio >= 0.4f -> Color(0xFFFFB74D)
+    else          -> Color(0xFFEF9A9A)
 }
 
 private fun formatBytes(bytes: Long): String = when {
@@ -739,7 +859,6 @@ private fun formatBytes(bytes: Long): String = when {
     else                    -> "$bytes B"
 }
 
-/** Convert ISO 3166-1 alpha-2 country code to its emoji flag. */
 private fun regionFlag(code: String): String {
     if (code.length != 2) return "🌍"
     val base = 0x1F1E6 - 'A'.code
@@ -747,31 +866,30 @@ private fun regionFlag(code: String): String {
            String(Character.toChars(base + code[1].uppercaseChar().code))
 }
 
-/** Dark color scheme used throughout the app — black and purple. */
 @Composable
 fun rnetDarkColorScheme(): ColorScheme = darkColorScheme(
-    primary              = Color(0xFFCE93D8),   // soft lavender-purple
-    onPrimary            = Color(0xFF1A0028),
-    primaryContainer     = Color(0xFF2D0845),   // very dark purple container
+    primary              = Color(0xFFB983E8),   // vivid lavender
+    onPrimary            = Color(0xFF16002A),
+    primaryContainer     = Color(0xFF311050),   // rich purple container
     onPrimaryContainer   = Color(0xFFEDD5F7),
-    secondary            = Color(0xFFB39DDB),   // muted violet accent
-    onSecondary          = Color(0xFF1A0040),
+    secondary            = Color(0xFF9B82D4),   // soft violet
+    onSecondary          = Color(0xFF16003C),
     secondaryContainer   = Color(0xFF1E0D35),
     onSecondaryContainer = Color(0xFFD8C8F0),
-    tertiary             = Color(0xFFF48FB1),   // soft pink accent for notices
+    tertiary             = Color(0xFFF48FB1),
     onTertiary           = Color(0xFF2A0018),
     tertiaryContainer    = Color(0xFF1E0010),
     onTertiaryContainer  = Color(0xFFFFC8DB),
-    background           = Color(0xFF07040C),   // near-black with slight purple tint
-    onBackground         = Color(0xFFE8DFF0),
-    surface              = Color(0xFF0F0A18),   // card background — dark purple-black
-    onSurface            = Color(0xFFE8DFF0),
-    surfaceVariant       = Color(0xFF180F25),   // slightly lighter surface
-    onSurfaceVariant     = Color(0xFF9E8FB0),   // muted label — soft purple-grey
+    background           = Color(0xFF060309),   // near-black, slight purple
+    onBackground         = Color(0xFFEDE6F5),
+    surface              = Color(0xFF0E0917),   // card dark-purple
+    onSurface            = Color(0xFFEDE6F5),
+    surfaceVariant       = Color(0xFF1A1226),
+    onSurfaceVariant     = Color(0xFF9B8DB4),
     error                = Color(0xFFEF9A9A),
     onError              = Color(0xFF4E0000),
     errorContainer       = Color(0xFF2A0A0A),
     onErrorContainer     = Color(0xFFFFCDD2),
-    outline              = Color(0xFF2E2040),   // subtle purple separator
-    outlineVariant       = Color(0xFF211530)
+    outline              = Color(0xFF2A1D3D),
+    outlineVariant       = Color(0xFF1E1430)
 )
