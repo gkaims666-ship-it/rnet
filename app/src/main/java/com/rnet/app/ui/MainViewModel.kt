@@ -176,15 +176,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setExitRegion(region: String) {
         prefs.edit().putString("exit_region", region).apply()
         RnetForegroundService.pendingRegion = region
+        // Read engineActive BEFORE the state update so we don't race with the copy below
+        val engineRunning = _ui.value.engineActive
         _ui.update { it.copy(exitRegion = region) }
 
-        val ctx = getApplication<Application>().applicationContext
-        if (_ui.value.engineActive) {
-            // Live hot-swap — service handles the region change without disconnecting
-            val intent = Intent(ctx, RnetForegroundService::class.java).apply {
-                action = RnetForegroundService.ACTION_CHANGE_REGION
-                putExtra(RnetForegroundService.EXTRA_REGION, region)
-            }
+        if (engineRunning) {
+            // Live hot-swap — service handles the region change without disconnecting.
+            // Use sendBroadcast() (not startForegroundService()) to avoid
+            // ForegroundServiceStartNotAllowedException on Android 14 from background.
+            val ctx = getApplication<Application>().applicationContext
             ctx.sendBroadcast(Intent(RnetForegroundService.ACTION_CHANGE_REGION).apply {
                 `package` = ctx.packageName
                 putExtra(RnetForegroundService.EXTRA_REGION, region)

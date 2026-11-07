@@ -284,7 +284,8 @@ class RnetForegroundService : VpnService() {
         cellMon?.stop()
         activeSocksPort = 0; activeBytesIn.set(0); activeBytesOut.set(0)
         activeSessionCount.set(0); routeCacheSize = 0; pooledSockets = 0
-        postNotif()
+        // Bug fix: only postNotif() when gateway keeps the service alive.
+        // If we're stopping entirely, skip the notification update — we're about to remove it.
         if (!gwStarted) {
             // Remove the persistent notification and stop the foreground service properly.
             // stopForeground() must be called before stopSelf() on Android 12+ (API 31+)
@@ -296,6 +297,9 @@ class RnetForegroundService : VpnService() {
                 stopForeground(true)
             }
             stopSelf()
+        } else {
+            // Gateway still running — update notification to reflect engine stopped
+            postNotif()
         }
     }
 

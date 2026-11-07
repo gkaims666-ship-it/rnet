@@ -197,7 +197,9 @@ class MultipathEngine(
         val paths = activePaths.values.toList()
         if (paths.isEmpty()) return
         // Round-robin across paths for load distribution
-        val socket = paths[(txSeq.get() % paths.size).toInt().coerceAtLeast(0)]
+        // Bug fix: `Long % Int` keeps the sign of the dividend, so coerceAtLeast(0) was
+        // needed but still wrong when paths.size > 1. Use Math.floorMod for always-positive result.
+        val socket = paths[Math.floorMod(txSeq.get(), paths.size.toLong()).toInt()]
         try {
             socket.send(DatagramPacket(packet, packet.size, remoteAddress))
         } catch (_: Exception) {}
@@ -206,8 +208,7 @@ class MultipathEngine(
     private fun bindPath(network: Network) {
         if (activePaths.containsKey(network)) return
         try {
-            val socket = network.socketFactory.createSocket() as? java.net.Socket ?: return
-            socket.close()
+            // Bug fix: removed dead code that created+closed a TCP Socket for no reason.
             // DatagramSocket bound to this specific network
             val ds = DatagramSocket()
             network.bindSocket(ds)

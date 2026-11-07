@@ -58,6 +58,10 @@ class HotspotGateway(
     private val _stations = MutableStateFlow<Map<String, StationMetrics>>(emptyMap())
     val stations: StateFlow<Map<String, StationMetrics>> = _stations
 
+    // Bug fix: StateFlow is not thread-safe for read-modify-write (`value += n`).
+    // Use AtomicLong for concurrent byte counting; expose via StateFlow for UI.
+    private val _totalBytesInAtomic  = java.util.concurrent.atomic.AtomicLong(0L)
+    private val _totalBytesOutAtomic = java.util.concurrent.atomic.AtomicLong(0L)
     private val _totalBytesIn  = MutableStateFlow(0L)
     val totalBytesIn: StateFlow<Long> = _totalBytesIn
 
@@ -159,25 +163,31 @@ class HotspotGateway(
         // Forward client traffic through MultipathEngine
         val forward = scope.launch {
             while (true) {
-                val n = clientIn.read(buf)
+                val n = try { clientIn.read(buf) } catch (_: Exception) { break }
                 if (n <= 0) break
                 val data = buf.copyOf(n)
                 metrics.bytesIn.addAndGet(n.toLong())
-                _totalBytesIn.value += n
+                _totalBytesInAtomic.addAndGet(n.toLong())
                 engine?.send(data)
             }
         }
-        // Return traffic from engine to client
-        val backward = scope.launch {
-            engine?.inbound?.collect { data ->
-                clientOut.write(data)
-                clientOut.flush()
-                metrics.bytesOut.addAndGet(data.size.toLong())
-                _totalBytesOut.value += data.size
+        // Return traffic from engine to client.
+        // Bug fix: when engine is null this coroutine would run forever collecting nothing.
+        // Wrap in a check; also cancel forward when backward fails (e.g. client disconnected).
+        val backward = if (engine != null) scope.launch {
+            try {
+                engine.inbound.collect { data ->
+                    clientOut.write(data)
+                    clientOut.flush()
+                    metrics.bytesOut.addAndGet(data.size.toLong())
+                    _totalBytesOutAtomic.addAndGet(data.size.toLong())
+                }
+            } catch (_: Exception) {
+                forward.cancel()
             }
-        }
+        } else null
         forward.join()
-        backward.cancel()
+        backward?.cancel()
     }
 
     // ----- Metric helpers -----
@@ -194,6 +204,9 @@ class HotspotGateway(
             )
         }
         _stations.value = snapshot
+        // Flush atomic byte counters to StateFlow for UI observers
+        _totalBytesIn.value  = _totalBytesInAtomic.get()
+        _totalBytesOut.value = _totalBytesOutAtomic.get()
     }
 
     private fun deriveStationKey(addr: InetAddress): String {

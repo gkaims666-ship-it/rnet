@@ -40,7 +40,8 @@ object DnsCache {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val all = prefs.all
             val now = System.currentTimeMillis()
-            var loaded = 0
+            var count = 0   // Bug fix: was `var loaded = 0` which shadowed the class field,
+                            // preventing the outer `loaded = true` guard from ever being set
             for ((host, value) in all) {
                 try {
                     val j = JSONObject(value as String)
@@ -48,11 +49,11 @@ object DnsCache {
                     val cachedAt = j.getLong("at")
                     if (now - cachedAt < TTL_MS * 12) { // keep up to 1 hour on disk
                         mem[host] = Entry(ip, cachedAt, now)
-                        loaded++
+                        count++
                     }
                 } catch (_: Exception) {}
             }
-            Log.i(TAG, "Loaded $loaded DNS entries from disk")
+            Log.i(TAG, "Loaded $count DNS entries from disk")
         } catch (e: Exception) {
             Log.w(TAG, "DNS cache load failed: ${e.message}")
         }
