@@ -24,6 +24,11 @@ import androidx.compose.ui.draw.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.res.stringResource
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -199,7 +204,11 @@ fun RnetDashboard(
                 modifier = Modifier.padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (uiState.engineActive) {
+                AnimatedVisibility(
+                    visible = uiState.engineActive,
+                    enter = fadeIn(tween(400)) + expandVertically(tween(400)),
+                    exit  = fadeOut(tween(300)) + shrinkVertically(tween(300))
+                ) {
                     ConnectionStatusCard(uiState)
                 }
 
@@ -211,7 +220,13 @@ fun RnetDashboard(
                     proxyLabel      = uiState.proxyLabel
                 )
 
-                ResilientCoreCard(uiState.useResilientCore, onResilientCoreToggle)
+                AnimatedVisibility(
+                    visible = true,
+                    enter = fadeIn(tween(500, delayMillis = 100)),
+                    exit  = fadeOut(tween(300))
+                ) {
+                    ResilientCoreCard(uiState.useResilientCore, onResilientCoreToggle)
+                }
 
                 TelemetryCard(uiState)
 
@@ -422,28 +437,32 @@ private fun EngineHeroSection(state: UiState, onToggle: (Boolean) -> Unit) {
             )
 
             if (active && !isConnecting && state.exitRegion.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center,
                     modifier = Modifier
-                        .clip(MaterialTheme.shapes.extraSmall)
-                        .background(Purple700.copy(alpha = 0.6f))
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(Purple700.copy(alpha = 0.8f), Color(0xFF0A1A1E).copy(alpha = 0.8f))
+                            )
+                        )
+                        .border(1.dp, CyanAccent.copy(alpha = 0.2f), MaterialTheme.shapes.small)
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
                 ) {
-                    Text(regionFlag(state.exitRegion), fontSize = 14.sp)
-                    Spacer(Modifier.width(6.dp))
+                    Text(regionFlag(state.exitRegion), fontSize = 15.sp)
+                    Spacer(Modifier.width(7.dp))
                     Text(
                         text = state.exitRegion,
                         style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = CyanAccent
+                        fontWeight = FontWeight.Bold,
+                        color = CyanAccent,
+                        letterSpacing = 1.sp
                     )
-                    Spacer(Modifier.width(6.dp))
-                    Box(
-                        modifier = Modifier.size(5.dp).clip(CircleShape)
-                            .background(GreenActive)
-                    )
+                    Spacer(Modifier.width(10.dp))
+                    // Animated uptime counter
+                    UptimeCounter()
                 }
             }
         }
@@ -899,6 +918,38 @@ private fun MetricRow(
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.SemiBold,
             color = valueColor)
+    }
+}
+
+// ── Uptime counter ────────────────────────────────────────────────────────────
+
+@Composable
+private fun UptimeCounter() {
+    var seconds by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000L)
+            seconds++
+        }
+    }
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    val text = if (h > 0) "%d:%02d:%02d".format(h, m, s)
+               else       "%02d:%02d".format(m, s)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier.size(5.dp).clip(CircleShape)
+                .background(GreenActive)
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = GreenActive.copy(alpha = 0.85f),
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+        )
     }
 }
 

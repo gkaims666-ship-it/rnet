@@ -179,9 +179,13 @@ class MeshRouter(
     }
 
     private fun selectAndConnectGateway() {
-        // Find consented Wi-Fi Direct peer with uplink and best signal
-        val bestWifiPeer = wifiMesh.peers.value
-            .minByOrNull { it.status }  // CONNECTED=0, INVITED=1, AVAILABLE=3 — lower is better
+        // Bug fix: minByOrNull { it.status } selected CONNECTED(0) peers — but we need
+        // AVAILABLE(3) peers to connect to. Filtering to status==AVAILABLE first, then
+        // selecting any one of them is the correct approach (Wi-Fi Direct has no RSSI).
+        val available = wifiMesh.peers.value
+            .filter { it.status == android.net.wifi.p2p.WifiP2pDevice.AVAILABLE }
+        val bestWifiPeer = available.firstOrNull()
+            ?: wifiMesh.peers.value.firstOrNull()  // fallback: try any peer if none AVAILABLE
 
         bestWifiPeer?.let { device ->
             // Consent is enforced at UI layer (MeshConsentDialog) before this runs

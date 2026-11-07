@@ -90,7 +90,11 @@ object RouteStore {
         if (System.currentTimeMillis() - r.savedAtMs > TTL_MS) {
             store.remove(key); return null
         }
-        r.hitCount++
+        // Bug fix: hitCount++ on a shared data class field is a non-atomic read-modify-write.
+        // Multiple session threads calling get() concurrently lose increments and corrupt LRU.
+        // Replace the entry atomically using ConcurrentHashMap.replace so each increment is safe.
+        store.replace(key, r, r.copy(hitCount = r.hitCount + 1))
+        // Return the original r — caller only needs the region/port, not the updated hitCount.
         return r
     }
 

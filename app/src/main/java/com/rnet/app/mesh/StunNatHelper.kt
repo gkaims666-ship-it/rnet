@@ -141,14 +141,19 @@ object StunNatHelper {
                     )
                     return ReflexiveAddress(ip, xPort)
                 }
-                // IPv6 or unrecognised family — skip the rest of this attribute
-                val consumed = 8  // family(1) + reserved(1) + port(2) + IPv4(4) already read for IPv4;
-                                  // for other families, skip the declared length minus the 2 we read
-                val skip = attrLen - 2  // already consumed: reserved(1) + family(1)
-                val padded = (attrLen + 3) and 3.inv()
-                val toSkip = minOf(padded - 2, buf.remaining())
+                // IPv6 or unrecognised family — skip remaining bytes of this attribute.
+                // Bug fix: we already consumed reserved(1) + family(1) = 2 bytes of the
+                // attribute payload. The attribute declared attrLen total payload bytes.
+                // We must skip (attrLen - 2) more bytes, then pad to 4-byte boundary.
+                // Previous code had dead variables and miscalculated the skip amount,
+                // leaving buf.position corrupted for all subsequent attributes.
+                val alreadyConsumed = 2  // reserved + family already read above
+                val leftInAttr = attrLen - alreadyConsumed
+                val paddedTotal = (attrLen + 3) and 3.inv()
+                val paddingBytes = paddedTotal - attrLen
+                val toSkip = minOf(leftInAttr + paddingBytes, buf.remaining())
                 if (toSkip > 0) buf.position(buf.position() + toSkip)
-                remaining -= minOf(padded, remaining)
+                remaining -= minOf(paddedTotal, remaining)
             } else {
                 // Skip this attribute (padded to 4-byte boundary)
                 val padded = (attrLen + 3) and 3.inv()

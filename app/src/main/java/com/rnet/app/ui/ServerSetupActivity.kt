@@ -5,15 +5,24 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.rnet.app.R
 import com.rnet.app.prefs.ServerPrefs
 
@@ -56,6 +65,15 @@ private fun ServerSetupScreen(onSave: (host: String, port: Int) -> Unit) {
     var hostError by remember { mutableStateOf(false) }
     var portError by remember { mutableStateOf(false) }
 
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF0D0618), Color(0xFF0E0820), Color(0xFF0D0618))
+                )
+            )
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -63,9 +81,25 @@ private fun ServerSetupScreen(onSave: (host: String, port: Int) -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // Logo
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(Brush.radialGradient(listOf(Color(0xFF4A1980), Color(0xFF160826)))),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Filled.Shield, null, tint = Color(0xFFB983E8),
+                modifier = Modifier.size(32.dp))
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
         Text(
             text = stringResource(R.string.server_setup_title),
-            style = MaterialTheme.typography.headlineMedium
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFFEDE6F5)
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -73,7 +107,7 @@ private fun ServerSetupScreen(onSave: (host: String, port: Int) -> Unit) {
         Text(
             text = stringResource(R.string.server_setup_body),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = Color(0xFF9B8DB4)
         )
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -130,7 +164,8 @@ private fun ServerSetupScreen(onSave: (host: String, port: Int) -> Unit) {
         Text(
             text = stringResource(R.string.server_setup_hint),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = Color(0xFF9B8DB4)
         )
     }
+    } // Box
 }

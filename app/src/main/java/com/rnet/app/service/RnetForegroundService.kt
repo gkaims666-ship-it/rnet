@@ -650,7 +650,9 @@ class RnetForegroundService : VpnService() {
                 backoffMs = 1_000L
             } else {
                 // Short run = failed fast — back off with jitter (50-150% of backoffMs)
-                val jitter = (backoffMs * (0.5 + Math.random())).toLong()
+                // Bug fix: Math.random() delegates to a shared java.util.Random instance
+                // that is not thread-safe; use kotlin.random.Random which is thread-safe.
+                val jitter = (backoffMs * (0.5 + kotlin.random.Random.nextDouble())).toLong()
                 delay(jitter)
                 backoffMs = (backoffMs * 2).coerceAtMost(30_000L)   // cap at 30s
             }
@@ -924,13 +926,17 @@ class RnetForegroundService : VpnService() {
     }
 
     private fun relayUdpDirect(dIP: InetAddress, dPort: Int, pay: ByteArray): ByteArray? {
+        // Bug fix: use use{} so the socket is always closed, even if receive() throws.
+        // Previously the socket was leaked on any IOException from receive().
         return try {
-            val sock = DatagramSocket(); protect(sock)
-            sock.soTimeout = 5000
-            sock.send(DatagramPacket(pay, pay.size, dIP, dPort))
-            val rb = ByteArray(4096); val rp = DatagramPacket(rb, rb.size)
-            sock.receive(rp); sock.close()
-            rb.copyOf(rp.length)
+            DatagramSocket().use { sock ->
+                protect(sock)
+                sock.soTimeout = 5000
+                sock.send(DatagramPacket(pay, pay.size, dIP, dPort))
+                val rb = ByteArray(4096); val rp = DatagramPacket(rb, rb.size)
+                sock.receive(rp)
+                rb.copyOf(rp.length)
+            }
         } catch (_: Exception) { null }
     }
 
@@ -1092,7 +1098,11 @@ class RnetForegroundService : VpnService() {
     // ── Gateway ───────────────────────────────────────────────────────────────
     private fun startGw() {
         if (gwStarted) return
-        if (!engineStarted) start()
+        // Bug fix: don't call start() here — startGw() may be invoked directly via
+        // onStartCommand(ACTION_GATEWAY_START) before the VPN permission is granted.
+        // Calling start() unconditionally would start a VPN without permission, causing
+        // establish() to return null and loop, corrupting engineStarted state.
+        // The gateway operates independently of the VPN engine.
         val gw = HotspotGateway(this, null); gw.grantConsent(); gw.start()
         gateway = gw; gwStarted = true; postNotif()
     }

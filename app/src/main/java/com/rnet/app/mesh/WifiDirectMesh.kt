@@ -266,7 +266,10 @@ class WifiDirectMesh(private val context: Context) {
         sockets.remove(peerAddr)
         if (sockets.isEmpty() && _meshState.value == MeshState.CONNECTED) {
             _meshState.value = MeshState.DISCOVERING
-            startDiscovery()
+            // Bug fix: WifiP2pManager calls must happen on the main thread.
+            // startDiscovery() calls manager.discoverPeers() which requires the main
+            // looper. receiveLoop() runs on an IO thread — post to main via Handler.
+            android.os.Handler(context.mainLooper).post { startDiscovery() }
         }
     }
 
