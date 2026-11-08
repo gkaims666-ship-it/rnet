@@ -232,11 +232,17 @@ class SmartRouter(
     // ── Probe ─────────────────────────────────────────────────────────────────
 
     private fun probe(dstIP: InetAddress, dstPort: Int, key: String): Socket? {
-        val order = buildList {
+        // Perf: build the preferred-first list, then float regions whose tunnel is
+        // ALREADY warm to the front. getSocksPort() on a cold region blocks while a
+        // new Psiphon tunnel bootstraps (seconds); trying a ready tunnel first gives
+        // a much faster first byte and faster failover. sortedByDescending is stable,
+        // so preferred stays first among ready regions and ordering is otherwise kept.
+        // DIRECT is always tried last.
+        val regions = buildList {
             add(preferredRegion)
             FALLBACK_ORDER.forEach { if (it != preferredRegion) add(it) }
-            add(DIRECT)
-        }
+        }.sortedByDescending { pool.isReady(it) }
+        val order = regions + DIRECT
         for (region in order) {
             if (!pool.alive) return null
             // New feature: skip regions that have failed too many times recently
@@ -281,9 +287,12 @@ class SmartRouter(
         speedProbeExecutor.execute {
             try {
                 Thread.sleep(2000)  // wait until main connection is established
+                // Perf: only probe ONE ready alternative (was 2). Each probe opens a
+                // socket through a tunnel and competes with real traffic on a
+                // constrained link — keep the background overhead minimal.
                 val candidates = FALLBACK_ORDER
                     .filter { it != currentRegion && pool.isReady(it) }
-                    .take(2)
+                    .take(1)
 
                 var bestRegion = currentRegion
                 var bestSpeed = measureSpeed(dstIP, dstPort, currentRegion, currentPort)

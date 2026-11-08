@@ -27,8 +27,8 @@ import java.util.concurrent.TimeUnit
  */
 class ConnectionPool(
     private val router: SmartRouter,
-    private val maxPerDest: Int = 2,
-    private val idleTimeoutMs: Long = 30_000L   // 30s idle → close
+    private val maxPerDest: Int = 3,            // perf: pre-warm one extra socket per dest
+    private val idleTimeoutMs: Long = 45_000L   // perf: hold warm sockets a bit longer (was 30s)
 ) {
     companion object {
         private const val TAG = "ConnPool"

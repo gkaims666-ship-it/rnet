@@ -448,9 +448,12 @@ class RnetForegroundService : VpnService() {
 
             postNotif()
 
-            // Warm up 2 fallback tunnels in background for fast failover
-            val fallbacks = listOf("DE", "NL", "US").filter { it != preferredRegion }.take(2)
-            fallbacks.forEach { fb -> launch { tp.getSocksPort(fb) } }
+            // Perf: warm up to 3 fallback tunnels in the background (fills the pool to
+            // MAX_TUNNELS) so there is always a ready exit for instant failover. These
+            // start after the preferred tunnel is already ACTIVE, so they never delay
+            // the first connection.
+            val fallbacks = listOf("DE", "NL", "US", "SE").filter { it != preferredRegion }.take(3)
+            fallbacks.forEach { fb -> launch { runCatching { tp.getSocksPort(fb) } } }
         } else {
             Log.w(TAG, "Preferred tunnel $preferredRegion failed — trying fallbacks")
             val fallbackOrder = listOf("IS","EE","DE","NL","SE","US","CA","GB")
