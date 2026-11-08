@@ -202,7 +202,12 @@ class WifiDirectMesh(private val context: Context) {
                             if (info.isGroupOwner) {
                                 scope.launch { startGroupOwnerServer() }
                             } else {
-                                scope.launch { connectAsClient(info.groupOwnerAddress.hostAddress ?: return@launch) }
+                                // Bug fix: groupOwnerAddress can be null when Android has
+                                // not yet resolved the GO's IP (race during group formation).
+                                // Null-safe check prevents NPE crash in connectAsClient().
+                                val goAddr = info.groupOwnerAddress?.hostAddress
+                                    ?: return@requestConnectionInfo
+                                scope.launch { connectAsClient(goAddr) }
                             }
                         }
                     } else {
@@ -223,10 +228,17 @@ class WifiDirectMesh(private val context: Context) {
     // ── Group Owner TCP server ────────────────────────────────────────────────
 
     private suspend fun startGroupOwnerServer() {
-        serverSocket = ServerSocket(DATA_PORT)
+        // Bug fix: bind with reuseAddress=true so that after a group is destroyed and
+        // re-formed, the port in TIME_WAIT state can be reused immediately instead of
+        // throwing BindException for up to 60 s (TCP TIME_WAIT period).
+        val ss = ServerSocket()
+        ss.reuseAddress = true
+        ss.bind(java.net.InetSocketAddress(DATA_PORT))
+        serverSocket = ss
         while (currentCoroutineContext().isActive) {
             try {
-                val client = serverSocket!!.accept()
+                val srv = serverSocket ?: break  // null means shutdown() was called
+                val client = srv.accept()
                 val addr   = client.inetAddress.hostAddress ?: continue
                 sockets[addr] = client
                 scope.launch { receiveLoop(client, addr) }
@@ -257,7 +269,12 @@ class WifiDirectMesh(private val context: Context) {
         val din = DataInputStream(socket.getInputStream())
         while (!socket.isClosed) {
             try {
-                val len  = din.readInt()
+                val len = din.readInt()
+                // Bug fix: a corrupt packet (bit flip, partial write, wrong endianness)
+                // could produce a huge positive `len`, causing ByteArray(len) to throw
+                // OutOfMemoryError or NegativeArraySizeException (if int overflows to neg).
+                // Guard with a reasonable max frame size.
+                if (len <= 0 || len > 65536) break
                 val data = ByteArray(len)
                 din.readFully(data)
                 scope.launch { _inbound.emit(data) }

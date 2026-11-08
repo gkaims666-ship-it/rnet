@@ -63,9 +63,17 @@ class PsiphonTransport(
         socksProxyPort = 0
         _state.value = State.CONNECTING
         tunnel.startTunneling("")
-        // Block here until onListeningSocksProxyPort fires (or timeout)
-        val port = runBlocking {
-            withTimeoutOrNull(60_000L) { portReady.await() }
+        // Block here until onListeningSocksProxyPort fires (or timeout).
+        // Bug fix: if stop() is called concurrently, portReady.cancel() fires a
+        // CancellationException inside the runBlocking block. Catch it and convert
+        // to a regular Exception so callers (TunnelPool.startTunnel) handle it cleanly
+        // rather than seeing an uncaught CancellationException propagate up the stack.
+        val port = try {
+            runBlocking {
+                withTimeoutOrNull(60_000L) { portReady.await() }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw Exception("Psiphon tunnel was stopped before the SOCKS port was assigned")
         } ?: throw Exception("Psiphon SOCKS port not assigned within 60 s")
         return "socks5://127.0.0.1:$port"
     }
