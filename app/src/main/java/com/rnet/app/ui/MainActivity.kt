@@ -104,10 +104,34 @@ class MainActivity : ComponentActivity() {
                             viewModel.toggleGateway(false)
                         }
                     },
-                    onFaqClick = { startActivity(Intent(this, FaqActivity::class.java)) }
+                    onFaqClick = { startActivity(Intent(this, FaqActivity::class.java)) },
+                    onReportClick = { shareCrashLogs() }
                 )
             }
         }
+    }
+
+    /**
+     * Share any captured crash logs via the Android share sheet (Telegram, email,
+     * save to Downloads, upload to GitHub, …). Logs are plain text and already
+     * sanitized (no destinations, no device fingerprint). Nothing is uploaded
+     * automatically — the user picks where each report goes.
+     */
+    private fun shareCrashLogs() {
+        val text = com.rnet.app.diag.CrashHandler.recentReportsText(this)
+        if (text.isNullOrBlank()) {
+            android.widget.Toast.makeText(
+                this, "No crash logs yet — nothing to share.",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "RNET crash logs")
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        startActivity(Intent.createChooser(send, "Share crash logs"))
     }
 
     private fun requestVpnPermission() {
@@ -174,7 +198,8 @@ fun RnetDashboard(
     onGatewayToggle: (Boolean) -> Unit,
     onResilientCoreToggle: (Boolean) -> Unit = {},
     onRegionChange: (String) -> Unit = {},
-    onFaqClick: () -> Unit = {}
+    onFaqClick: () -> Unit = {},
+    onReportClick: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -193,7 +218,7 @@ fun RnetDashboard(
                 .verticalScroll(rememberScrollState())
         ) {
             // Top bar
-            RnetTopBar(onFaqClick)
+            RnetTopBar(onFaqClick, onReportClick)
 
             Spacer(Modifier.height(4.dp))
 
@@ -239,7 +264,7 @@ fun RnetDashboard(
 }
 
 @Composable
-private fun RnetTopBar(onFaqClick: () -> Unit) {
+private fun RnetTopBar(onFaqClick: () -> Unit, onReportClick: () -> Unit = {}) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -281,8 +306,14 @@ private fun RnetTopBar(onFaqClick: () -> Unit) {
                 )
             }
         }
-        IconButton(onClick = onFaqClick) {
-            Icon(Icons.Filled.Info, null, tint = TextSecondary)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onReportClick) {
+                Icon(Icons.Filled.BugReport, contentDescription = "Share crash logs",
+                    tint = TextSecondary)
+            }
+            IconButton(onClick = onFaqClick) {
+                Icon(Icons.Filled.Info, null, tint = TextSecondary)
+            }
         }
     }
 }
