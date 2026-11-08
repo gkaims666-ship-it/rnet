@@ -887,9 +887,21 @@ class RnetForegroundService : VpnService() {
             // the VPN tun. Without protect(), the DoH connection routes through the tun
             // itself → triggers another DNS lookup → infinite recursion → deadlock.
             val cached = tryResolveDnsFromCache(pay)
-            cached ?: DoHResolver.resolveParallel(pay, protect = { sock -> protect(sock) })
+            val socksPort = activeSocksPort
+            // Resolution order matters for censored networks:
+            //   1. session cache
+            //   2. DoH THROUGH the tunnel (exit resolves it — cannot be seen or
+            //      poisoned by the local ISP; this is what makes blocked domains
+            //      resolve to their real IPs)
+            //   3. DoH direct (protect()ed) — fast, but blockable by the ISP
+            //   4. plain UDP DNS — last resort, poisonable; only if all else fails
+            cached
+                ?: (if (socksPort > 0)
+                        DoHResolver.resolveViaSocks(pay, socksPort) { sock -> protect(sock) }
+                    else null)?.also { storeDnsToCache(pay, it) }
+                ?: DoHResolver.resolveParallel(pay) { sock -> protect(sock) }
                        ?.also { storeDnsToCache(pay, it) }
-                    ?: DoHResolver.resolveUdp(pay) { sock -> protect(sock) }
+                ?: DoHResolver.resolveUdp(pay) { sock -> protect(sock) }
         } else {
             // Non-DNS UDP (QUIC, DTLS, etc.): Psiphon SOCKS5 does not support UDP ASSOCIATE,
             // so we cannot proxy these packets. Sending them direct via protect() bypasses

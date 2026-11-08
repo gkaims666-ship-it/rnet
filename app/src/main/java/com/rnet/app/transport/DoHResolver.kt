@@ -26,6 +26,16 @@ import javax.net.ssl.SSLSocketFactory
  * bypass the VPN tun. Without this, the DoH connection goes through the
  * tun → handler → another DoH call → infinite loop → deadlock.
  *
+ * Two resolution paths:
+ *   • [resolveViaSocks] — tunnels the DoH query through the Psiphon SOCKS5
+ *     exit. The DNS query leaves the device *inside the encrypted tunnel*, so
+ *     the local network cannot see it, block it by SNI, or return a poisoned
+ *     answer for a censored domain. This is the honest path and should be
+ *     preferred whenever a tunnel is up.
+ *   • [resolveParallel] / [resolve] — DoH over a direct (protect()ed) socket.
+ *     Faster, but the local censor can block it (the TLS SNI to the DoH host
+ *     is visible) and, if it falls through to plain UDP, poison it.
+ *
  * Uses raw TLS sockets (not HttpsURLConnection) so we can call protect()
  * on the underlying socket before connecting.
  */
@@ -52,23 +62,62 @@ object DoHResolver {
     }
 
     /**
-     * Resolve a raw DNS query using DoH — PARALLEL edition.
-     * All endpoints probed simultaneously; first response wins.
+     * Resolve a raw DNS query using DoH over DIRECT (protect()ed) sockets —
+     * PARALLEL edition. All endpoints probed simultaneously; first response wins.
      *
-     * @param query    Raw DNS wire-format query bytes
-     * @param protect  VpnService.protect lambda — REQUIRED when called from
-     *                 inside the VPN service to prevent routing loops.
-     *                 Pass null only when VPN is not active.
+     * Prefer [resolveViaSocks] when a tunnel is up: direct DoH can be blocked by
+     * the local network (the TLS SNI to the DoH host is visible in plaintext).
      */
     fun resolveParallel(
         query: ByteArray,
         protect: ((Socket) -> Boolean)? = null
+    ): ByteArray? = probeParallel(query) { ep -> connectDirect(ep, protect) }
+
+    /**
+     * Resolve a raw DNS query by tunnelling the DoH request through the SOCKS5
+     * proxy on 127.0.0.1:[socksPort] (the active Psiphon exit). The DNS query is
+     * resolved at the exit, so the local network cannot see it, block it by SNI,
+     * or return a poisoned answer for a censored domain — this is what makes
+     * blocked domains resolve to their real addresses.
+     *
+     * The socket to the local SOCKS port is protect()ed so it bypasses the tun
+     * (no routing loop); the SOCKS proxy itself carries the query upstream.
+     */
+    fun resolveViaSocks(
+        query: ByteArray,
+        socksPort: Int,
+        protect: ((Socket) -> Boolean)? = null
+    ): ByteArray? = probeParallel(query) { ep -> connectViaSocks(ep, socksPort, protect) }
+
+    /**
+     * Sequential fallback resolve over direct sockets (kept for compatibility).
+     */
+    fun resolve(
+        query: ByteArray,
+        protect: ((Socket) -> Boolean)? = null
     ): ByteArray? {
+        for (ep in endpoints) {
+            try {
+                val sock = connectDirect(ep, protect) ?: continue
+                val resp = tlsExchange(sock, ep, query)
+                if (resp != null) return resp
+            } catch (e: Exception) {
+                Log.d(TAG, "DoH ${ep.ip} failed: ${e.message}")
+            }
+        }
+        return null
+    }
+
+    // ── Internal probe machinery ────────────────────────────────────────────
+
+    /** Probe all endpoints in parallel using [connect]; first valid answer wins. */
+    private fun probeParallel(query: ByteArray, connect: (DoHEndpoint) -> Socket?): ByteArray? {
         val result = LinkedBlockingQueue<ByteArray>(1)
         val futures = endpoints.map { ep ->
             dohPool.submit {
                 try {
-                    val resp = queryEndpoint(ep, query, protect)
+                    val sock = connect(ep) ?: return@submit
+                    val resp = tlsExchange(sock, ep, query)
                     if (resp != null) result.offer(resp)
                 } catch (e: Exception) {
                     Log.d(TAG, "DoH ${ep.ip} failed: ${e.message}")
@@ -80,51 +129,81 @@ object DoHResolver {
         return answer
     }
 
-    /**
-     * Sequential fallback resolve (kept for compatibility).
-     */
-    fun resolve(
-        query: ByteArray,
-        protect: ((Socket) -> Boolean)? = null
-    ): ByteArray? {
-        for (ep in endpoints) {
-            try {
-                val resp = queryEndpoint(ep, query, protect)
-                if (resp != null) return resp
-            } catch (e: Exception) {
-                Log.d(TAG, "DoH ${ep.ip} failed: ${e.message}")
-            }
+    /** Open a direct (protect()ed) TCP socket to the DoH endpoint IP. */
+    private fun connectDirect(ep: DoHEndpoint, protect: ((Socket) -> Boolean)?): Socket? {
+        val raw = Socket()
+        return try {
+            protect?.invoke(raw)
+            raw.soTimeout = TIMEOUT_MS
+            raw.tcpNoDelay = true
+            raw.connect(InetSocketAddress(ep.ip, ep.port), TIMEOUT_MS)
+            raw
+        } catch (e: Exception) {
+            runCatching { raw.close() }
+            null
         }
-        return null
     }
 
     /**
-     * Query a single DoH endpoint using a raw TLS socket.
-     * protect() is called on the underlying TCP socket BEFORE connect()
-     * so the connection bypasses the VPN tun entirely.
+     * Open a socket to the local SOCKS5 proxy (protect()ed so it bypasses the
+     * tun) and issue a SOCKS5 CONNECT to the DoH endpoint IP:port. Returns the
+     * tunnelled socket ready for TLS, or null on failure.
      */
-    private fun queryEndpoint(
-        ep: DoHEndpoint,
-        query: ByteArray,
-        protect: ((Socket) -> Boolean)?
-    ): ByteArray? {
-        val rawSock = Socket()
+    private fun connectViaSocks(ep: DoHEndpoint, socksPort: Int, protect: ((Socket) -> Boolean)?): Socket? {
+        val raw = Socket()
         return try {
-            // Protect BEFORE connecting — this makes the socket bypass the VPN tun
-            // and go directly to the network. Without this, when called from inside
-            // the VPN service, the connection would loop back through the tun.
-            protect?.invoke(rawSock)
+            protect?.invoke(raw)
+            raw.soTimeout = TIMEOUT_MS
+            raw.tcpNoDelay = true
+            raw.connect(InetSocketAddress("127.0.0.1", socksPort), TIMEOUT_MS)
+            if (!socks5Connect(raw, ep.ip, ep.port)) { raw.close(); return null }
+            raw
+        } catch (e: Exception) {
+            runCatching { raw.close() }
+            null
+        }
+    }
 
-            rawSock.soTimeout = TIMEOUT_MS
-            rawSock.tcpNoDelay = true
-            rawSock.connect(InetSocketAddress(ep.ip, ep.port), TIMEOUT_MS)
+    /** Minimal SOCKS5 no-auth CONNECT to a numeric IPv4 host:port. */
+    private fun socks5Connect(sock: Socket, ipv4: String, port: Int): Boolean {
+        val din = DataInputStream(sock.inputStream)
+        val out = sock.outputStream
+        // Greeting: VER=5, 1 method, NO-AUTH
+        out.write(byteArrayOf(0x05, 0x01, 0x00)); out.flush()
+        val greet = ByteArray(2); din.readFully(greet)
+        if (greet[0] != 0x05.toByte() || greet[1] != 0x00.toByte()) return false
+        // CONNECT: VER=5, CMD=1, RSV=0, ATYP=1 (IPv4), 4-byte addr, 2-byte port
+        val octets = ipv4.split(".").mapNotNull { it.toIntOrNull() }
+        if (octets.size != 4) return false
+        val req = ByteArray(10)
+        req[0] = 0x05; req[1] = 0x01; req[2] = 0x00; req[3] = 0x01
+        for (i in 0 until 4) req[4 + i] = (octets[i] and 0xFF).toByte()
+        req[8] = (port shr 8).toByte(); req[9] = (port and 0xFF).toByte()
+        out.write(req); out.flush()
+        // Reply: VER REP RSV ATYP + bound addr/port — read header, drain addr
+        val hdr = ByteArray(4); din.readFully(hdr)
+        if (hdr[0] != 0x05.toByte() || hdr[1] != 0x00.toByte()) return false
+        when (hdr[3].toInt() and 0xFF) {
+            0x01 -> din.readFully(ByteArray(4 + 2))
+            0x04 -> din.readFully(ByteArray(16 + 2))
+            0x03 -> { val len = din.read() and 0xFF; din.readFully(ByteArray(len + 2)) }
+            else -> return false
+        }
+        return true
+    }
 
-            // Wrap in TLS on top of the already-connected and already-protected socket.
-            // autoClose=true means closing the SSLSocket also closes rawSock.
+    /**
+     * Run the DoH HTTPS exchange (TLS handshake + HTTP POST + read body) over an
+     * already-connected socket whose stream reaches the DoH endpoint (directly or
+     * via SOCKS). Closes the socket. Returns the raw DNS response bytes or null.
+     */
+    private fun tlsExchange(connected: Socket, ep: DoHEndpoint, query: ByteArray): ByteArray? {
+        return try {
             val tlsFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val tls = tlsFactory.createSocket(rawSock, ep.sni, ep.port, true) as SSLSocket
+            // autoClose=true means closing the SSLSocket also closes `connected`.
+            val tls = tlsFactory.createSocket(connected, ep.sni, ep.port, true) as SSLSocket
             tls.soTimeout = TIMEOUT_MS
-            // Set explicit SNI so the server presents the right certificate
+            // Explicit SNI so the server presents the right certificate.
             tls.sslParameters = tls.sslParameters.also { p ->
                 p.serverNames = listOf(SNIHostName(ep.sni))
             }
@@ -134,7 +213,6 @@ object DoHResolver {
                 val out: OutputStream = ssl.outputStream
                 val din = DataInputStream(ssl.inputStream)
 
-                // Build HTTP/1.1 POST request
                 val request = buildString {
                     append("POST ${ep.path} HTTP/1.1\r\n")
                     append("Host: ${ep.sni}\r\n")
@@ -148,7 +226,6 @@ object DoHResolver {
                 out.write(query)
                 out.flush()
 
-                // Read HTTP response — parse status line and Content-Length header
                 val statusLine = readLine(din) ?: return@use null
                 if (!statusLine.contains("200")) return@use null
 
@@ -161,19 +238,17 @@ object DoHResolver {
                     }
                 }
 
-                // Read response body
                 if (contentLength in 1..65535) {
                     val respBytes = ByteArray(contentLength)
                     din.readFully(respBytes)
                     respBytes
                 } else if (contentLength < 0) {
-                    // No Content-Length: read until connection closes
                     ssl.inputStream.readBytes().takeIf { it.isNotEmpty() }
                 } else null
             }
         } catch (e: Exception) {
-            runCatching { rawSock.close() }
-            throw e   // re-throw so caller can log and try next endpoint
+            runCatching { connected.close() }
+            null
         }
     }
 
@@ -194,7 +269,9 @@ object DoHResolver {
 
     /**
      * Fallback: plain UDP DNS to upstream resolvers.
-     * Used if DoH fails (e.g. HTTPS itself is blocked).
+     * Used only if both DoH paths fail. WARNING: plain UDP DNS is visible to the
+     * local network and can be poisoned for censored domains — it is the last
+     * resort precisely because of that.
      * protect() must be supplied when called from inside the VPN service.
      */
     fun resolveUdp(
@@ -210,7 +287,6 @@ object DoHResolver {
             try {
                 // Bug fix: use `use{}` so the socket is always closed, even
                 // when sock.receive() throws (e.g. SocketTimeoutException).
-                // Previously the socket leaked on any exception after creation.
                 DatagramSocket().use { sock ->
                     protect(sock)
                     sock.soTimeout = 3000
