@@ -96,24 +96,20 @@ class RnetForegroundService : VpnService() {
         @Volatile var routeCacheSize     = 0   // how many destinations are cached
         @Volatile var pooledSockets      = 0   // pre-warmed sockets ready
         // Apps excluded from VPN (split tunneling).
-        // Google/YouTube traffic bypasses the VPN because:
-        //   1. YouTube CDN IPs (googlevideo.com) are blocked by Psiphon exit nodes — data-center
-        //      IPs get rate-limited or 403'd by Google's anti-proxy systems.
-        //   2. Russian ISPs do NOT block YouTube/Google directly (unlike some other services),
-        //      so a direct connection works fine and is faster.
-        //   3. GMS/Firebase are excluded to prevent VPN restart loops on network callbacks.
+        // Keep this list minimal — only system daemons that must NOT go through the proxy
+        // to avoid VPN restart loops or breakage. Do NOT exclude user-facing apps here:
+        //
+        //   • YouTube/Instagram ARE blocked by Russian ISPs (Roskomnadzor) — they MUST
+        //     go through the VPN to work. Excluding them here sends them direct → ISP
+        //     block → they never load.
+        //   • GMS/Firebase are excluded because they use direct Google APIs that break
+        //     when proxied through Psiphon (certificate pinning, region-locked services).
+        //     Russian ISPs do not block GMS, so direct is both safe and correct here.
         val SPLIT_TUNNEL_PACKAGES = setOf(
-            "com.android.vending",              // Play Store
-            "com.google.android.gms",           // Google Play Services
-            "com.google.android.gsf",           // Google Services Framework
-            "com.google.android.youtube",       // YouTube — Psiphon exits are proxy-blocked by Google CDN
-            "com.google.android.apps.youtube.music", // YouTube Music
-            "com.google.android.googlequicksearchbox", // Google Search/Assistant
-            "com.google.android.gm",            // Gmail
-            "com.google.android.apps.maps",     // Google Maps
-            "com.google.android.talk",          // Google Meet
-            "com.google.android.apps.meetings", // Google Meet (new package)
-            "com.android.providers.downloads",
+            "com.android.vending",              // Play Store — not blocked, avoid Psiphon overhead
+            "com.google.android.gms",           // Google Play Services — certificate-pinned, breaks via proxy
+            "com.google.android.gsf",           // Google Services Framework — same as GMS
+            "com.android.providers.downloads",  // System download manager
             "com.sec.android.daemonapp"         // Samsung system daemon
         )
     }
@@ -844,7 +840,18 @@ class RnetForegroundService : VpnService() {
                        ?.also { storeDnsToCache(pay, it) }
                     ?: DoHResolver.resolveUdp(pay) { sock -> protect(sock) }
         } else {
-            relayUdpDirect(dIP, dPort, pay)
+            // Non-DNS UDP (QUIC, DTLS, etc.): Psiphon SOCKS5 does not support UDP ASSOCIATE,
+            // so we cannot proxy these packets. Sending them direct via protect() bypasses
+            // the VPN — the ISP sees them unencrypted and blocks them (Instagram QUIC, etc.).
+            //
+            // Correct behavior: DROP non-DNS UDP silently. Modern apps (Instagram, YouTube,
+            // Chrome, Firefox) detect UDP loss within ~100 ms and fall back to TCP/TLS,
+            // which the VPN proxies correctly through Psiphon SOCKS5. The fallback is
+            // automatic and transparent to the user — the app just uses TCP instead of QUIC.
+            //
+            // Previously this called relayUdpDirect() which sent packets straight to the ISP,
+            // causing Russian ISP blocks to take effect for Instagram, Telegram, etc.
+            null
         }
         if (resp == null) return
         writeUdpResponse(sIP, sPort, dIP, dPort, resp)
