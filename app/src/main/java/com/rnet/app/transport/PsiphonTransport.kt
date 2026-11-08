@@ -189,12 +189,18 @@ class PsiphonTransport(
         put("LocalHttpProxyPort",  0)
         put("EgressRegion", egressRegion)       // location masking: exit in chosen country
         put("InproxyEnableProxy", false)
-        // Speed tuning
+        // Connection tuning.
+        //
+        // We deliberately do NOT set TunnelProtocolOrder. The previous config pinned
+        // a short list with plain OSSH/SSH first — exactly the protocols that
+        // aggressive DPI (e.g. in heavily censored networks) fingerprints and blocks,
+        // which is why the tunnel was only coming up intermittently. Omitting the
+        // order lets Psiphon use its FULL candidate set — including its obfuscated
+        // and domain-fronted transports — and adaptively select whichever actually
+        // establishes on this network. This is how the official client stays
+        // connected under censorship; we are enabling the SDK's own capability, not
+        // adding any custom traffic manipulation.
         put("ConnectionWorkerPoolSize", 10)     // parallel tunnel connection attempts
-        put("TunnelProtocolOrder",              // prefer fast protocols first
-            org.json.JSONArray().apply {
-                put("OSSH"); put("SSH"); put("FRONTED-MEEK-OSSH"); put("FRONTED-MEEK")
-            })
         put("NetworkLatencyMultiplier", 1.0)    // don't add extra latency
     }.toString()
 }
