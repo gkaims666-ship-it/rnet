@@ -65,6 +65,9 @@ class RnetForegroundService : VpnService() {
         private const val NOTIF  = 1001
         private const val TUN_IP = "10.0.0.2"
         private const val MTU    = 1500
+        // Max TCP payload per segment = MTU - 20 (IPv4 hdr) - 20 (TCP hdr).
+        // Inbound data MUST be chopped to this or the kernel drops oversized packets.
+        private const val MSS    = MTU - 40   // 1460
         private const val MAX_CON = 600
         private const val READ_BUF  = 65535
         private const val SOCK_BUF  = 262144
@@ -448,12 +451,13 @@ class RnetForegroundService : VpnService() {
 
             postNotif()
 
-            // Perf: warm up to 3 fallback tunnels in the background (fills the pool to
-            // MAX_TUNNELS) so there is always a ready exit for instant failover. These
-            // start after the preferred tunnel is already ACTIVE, so they never delay
-            // the first connection.
-            val fallbacks = listOf("DE", "NL", "US", "SE").filter { it != preferredRegion }.take(3)
-            fallbacks.forEach { fb -> launch { runCatching { tp.getSocksPort(fb) } } }
+            // Warm ONE fallback tunnel in the background for failover. On a throttled
+            // or censored link, starting several Psiphon tunnels at once makes them all
+            // compete for the squeezed pipe and none finish bootstrapping — so keep it to
+            // a single extra tunnel and let the preferred one have the bandwidth. It
+            // starts after the preferred tunnel is ACTIVE, so first connect is unaffected.
+            val fallback = listOf("DE", "NL", "US", "SE").firstOrNull { it != preferredRegion }
+            if (fallback != null) launch { runCatching { tp.getSocksPort(fallback) } }
         } else {
             Log.w(TAG, "Preferred tunnel $preferredRegion failed — trying fallbacks")
             val fallbackOrder = listOf("IS","EE","DE","NL","SE","US","CA","GB")
@@ -1052,8 +1056,18 @@ class RnetForegroundService : VpnService() {
                 try {
                     while (!closed) {
                         val n = sin.read(buf); if (n < 0) break; if (n == 0) continue
-                        sendTcp(dIP, dPort, sIP, sPort, sSeq, cAck, PSH or ACK, buf, n)
-                        sSeq = (sSeq + n) and 0xFFFFFFFFL  // 32-bit wrap per RFC 793
+                        // CRITICAL FIX: segment into <= MSS chunks. A tun read can return
+                        // up to 64 KB, but the tun MTU is 1500; emitting one oversized TCP
+                        // packet makes the kernel drop it, so large responses (basically
+                        // every real page/image/video) never arrive. Split into MSS-sized
+                        // segments, each with its own correctly-advanced sequence number.
+                        var off = 0
+                        while (off < n) {
+                            val seg = minOf(MSS, n - off)
+                            sendTcp(dIP, dPort, sIP, sPort, sSeq, cAck, PSH or ACK, buf, seg, off)
+                            sSeq = (sSeq + seg) and 0xFFFFFFFFL  // 32-bit wrap per RFC 793
+                            off += seg
+                        }
                         activeBytesIn.addAndGet(n.toLong())
                     }
                     if (!closed) sendTcp(dIP, dPort, sIP, sPort, sSeq, cAck, FIN or ACK, null, 0)
@@ -1099,7 +1113,7 @@ class RnetForegroundService : VpnService() {
     private fun sendTcp(srcIP: InetAddress, srcPort: Int,
                          dstIP: InetAddress, dstPort: Int,
                          seq: Long, ack: Long, flags: Int,
-                         pay: ByteArray?, payLen: Int) {
+                         pay: ByteArray?, payLen: Int, payOff: Int = 0) {
         val pLen  = if (pay != null && payLen > 0) payLen else 0
         val p     = ByteArray(40 + pLen)
         p[0] = 0x45.toByte(); w16(p, 2, 40 + pLen); p[8] = 64; p[9] = 6
@@ -1109,7 +1123,7 @@ class RnetForegroundService : VpnService() {
         w32(p, 24, seq);     w32(p, 28, ack)
         p[32] = 0x50.toByte(); p[33] = flags.toByte()
         p[34] = 0xFF.toByte(); p[35] = 0xFF.toByte()
-        if (pLen > 0) pay!!.copyInto(p, 40, 0, pLen)
+        if (pLen > 0) pay!!.copyInto(p, 40, payOff, payOff + pLen)
         w16(p, 36, tcpCs(p, 20, 20 + pLen, srcIP.address, dstIP.address))
         enqueuePkt(p)
     }
