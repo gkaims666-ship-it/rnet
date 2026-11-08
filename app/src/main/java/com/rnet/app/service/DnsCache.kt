@@ -1,8 +1,6 @@
 package com.rnet.app.service
 
 import android.content.Context
-import android.util.Log
-import org.json.JSONObject
 import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 
@@ -32,52 +30,25 @@ object DnsCache {
 
     // ── Public API ────────────────────────────────────────────────────────────
 
-    /** Load persisted cache from disk. Call once at VPN start. */
+    /**
+     * Zero-retention: resolved hostnames live ONLY in memory for the current
+     * session. The list of domains you look up is never written to disk.
+     *
+     * load() no longer reads from disk; it wipes any DNS history an older build
+     * may have persisted, so upgrading also cleans up the on-disk trail.
+     */
     fun load(context: Context) {
         if (loaded) return
         loaded = true
         try {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val all = prefs.all
-            val now = System.currentTimeMillis()
-            var count = 0   // Bug fix: was `var loaded = 0` which shadowed the class field,
-                            // preventing the outer `loaded = true` guard from ever being set
-            for ((host, value) in all) {
-                try {
-                    val j = JSONObject(value as String)
-                    val ip = j.getString("ip")
-                    val cachedAt = j.getLong("at")
-                    if (now - cachedAt < TTL_MS * 12) { // keep up to 1 hour on disk
-                        mem[host] = Entry(ip, cachedAt, now)
-                        count++
-                    }
-                } catch (_: Exception) {}
-            }
-            Log.i(TAG, "Loaded $count DNS entries from disk")
-        } catch (e: Exception) {
-            Log.w(TAG, "DNS cache load failed: ${e.message}")
-        }
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().clear().apply()
+        } catch (_: Exception) {}
     }
 
-    /** Persist current cache to disk. Call periodically or on VPN stop. */
+    /** No-op by design: resolved hostnames are never written to disk (zero-retention). */
     fun save(context: Context) {
-        try {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val ed = prefs.edit()
-            val now = System.currentTimeMillis()
-            // Only persist non-expired entries
-            for ((host, entry) in mem) {
-                if (now - entry.cachedAtMs < TTL_MS * 12) {
-                    ed.putString(host, JSONObject().apply {
-                        put("ip", entry.ip)
-                        put("at", entry.cachedAtMs)
-                    }.toString())
-                }
-            }
-            ed.apply()
-        } catch (e: Exception) {
-            Log.w(TAG, "DNS cache save failed: ${e.message}")
-        }
+        // Intentionally empty — see load() / class docs.
     }
 
     /**

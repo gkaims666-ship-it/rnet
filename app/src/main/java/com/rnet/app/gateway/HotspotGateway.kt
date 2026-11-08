@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.StateFlow
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.*
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -32,20 +31,25 @@ import java.util.concurrent.atomic.AtomicInteger
  *    use this Android device as a network gateway. You can stop this at any
  *    time by toggling the Gateway switch."
  *
- * QoS metrics tracked per station (MAC address):
- *   - Bytes in/out
- *   - Packet latency (round-trip ping)
- *   - Detected OS hint (from TCP User-Agent probe, non-identifying)
- *   - Active connection count
+ * BLIND GATEWAY — privacy by design:
+ *   The gateway does NOT inspect, classify, or profile the traffic of connected
+ *   peers. It keeps no per-peer records: no MAC/IP-derived keys, no OS
+ *   fingerprinting (no User-Agent sniffing), no per-peer byte/latency/connection
+ *   accounting. The only thing it measures is the aggregate bitrate across the
+ *   whole interface (total bytes in/out), so the host can see that the bridge is
+ *   doing something — never who is doing what. Peer bytes pass through a
+ *   transparent relay into the encrypted transport and are never examined.
  */
 class HotspotGateway(
     private val context: Context,
     private val engine: MultipathEngine?
 ) {
 
+    // Retained for API/source compatibility with the UI layer. The gateway no
+    // longer produces per-peer metrics, so the stations map is always empty.
     data class StationMetrics(
-        val macHint: String,         // Last 3 octets only — non-identifying
-        val osHint: String,          // "iOS", "Android", "Windows", "macOS", "Unknown"
+        val macHint: String,
+        val osHint: String,
         val bytesIn: Long,
         val bytesOut: Long,
         val latencyMs: Long,
@@ -54,10 +58,11 @@ class HotspotGateway(
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // Public state
+    // Public state — always empty: the blind gateway keeps no per-peer records.
     private val _stations = MutableStateFlow<Map<String, StationMetrics>>(emptyMap())
     val stations: StateFlow<Map<String, StationMetrics>> = _stations
 
+    // Aggregate interface throughput only — the one thing we measure.
     // Bug fix: StateFlow is not thread-safe for read-modify-write (`value += n`).
     // Use AtomicLong for concurrent byte counting; expose via StateFlow for UI.
     private val _totalBytesInAtomic  = java.util.concurrent.atomic.AtomicLong(0L)
@@ -71,7 +76,9 @@ class HotspotGateway(
     // Consent gate — MUST be true before start()
     private var consentGranted = false
 
-    private val stationMap = ConcurrentHashMap<String, StationMetricsInternal>()
+    // Only a live connection counter for aggregate throughput bookkeeping —
+    // not keyed to any peer identity.
+    private val activeConnections = AtomicInteger(0)
 
     private var proxyServer: ServerSocket? = null
 
@@ -123,50 +130,43 @@ class HotspotGateway(
     // ----- Per-client proxy handler -----
 
     private suspend fun handleClient(client: Socket) = withContext(Dispatchers.IO) {
-        val stationKey = deriveStationKey(client.inetAddress)
-        val internal   = stationMap.getOrPut(stationKey) { StationMetricsInternal() }
-        internal.connections.incrementAndGet()
-
+        activeConnections.incrementAndGet()
         try {
             val inStream  = client.getInputStream()
             val outStream = client.getOutputStream()
 
-            // Read CONNECT or first byte to determine target
-            val header = readHttpConnectHeader(inStream) ?: return@withContext
-            val (host, port, osHint) = parseConnectHeader(header)
-            internal.osHint = osHint
+            // Drain the HTTP CONNECT header off the stream so the byte stream is
+            // positioned at the tunnel payload. We do NOT inspect or parse it —
+            // no host/port logging, no User-Agent or OS fingerprinting. The
+            // encrypted transport handles routing; the gateway stays blind.
+            if (!drainHttpConnectHeader(inStream)) return@withContext
 
             // ACK to client (HTTP CONNECT tunnel)
             outStream.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
             outStream.flush()
 
             // Relay: client → engine (outbound), engine.inbound → client (inbound)
-            val relay = scope.launch {
-                relay(inStream, outStream, host, port, internal)
-            }
+            val relay = scope.launch { relay(inStream, outStream) }
             relay.join()
         } catch (_: Exception) {
         } finally {
-            internal.connections.decrementAndGet()
+            activeConnections.decrementAndGet()
             client.close()
         }
     }
 
     private suspend fun relay(
         clientIn: InputStream,
-        clientOut: OutputStream,
-        host: String,
-        port: Int,
-        metrics: StationMetricsInternal
+        clientOut: OutputStream
     ) {
         val buf = ByteArray(8192)
-        // Forward client traffic through MultipathEngine
+        // Forward client traffic through MultipathEngine. Count aggregate bytes
+        // only — never attributed to a peer.
         val forward = scope.launch {
             while (true) {
                 val n = try { clientIn.read(buf) } catch (_: Exception) { break }
                 if (n <= 0) break
                 val data = buf.copyOf(n)
-                metrics.bytesIn.addAndGet(n.toLong())
                 _totalBytesInAtomic.addAndGet(n.toLong())
                 engine?.send(data)
             }
@@ -179,7 +179,6 @@ class HotspotGateway(
                 engine.inbound.collect { data ->
                     clientOut.write(data)
                     clientOut.flush()
-                    metrics.bytesOut.addAndGet(data.size.toLong())
                     _totalBytesOutAtomic.addAndGet(data.size.toLong())
                 }
             } catch (_: Exception) {
@@ -190,81 +189,40 @@ class HotspotGateway(
         backward?.cancel()
     }
 
-    // ----- Metric helpers -----
+    // ----- Aggregate throughput only -----
 
     private fun publishMetrics() {
-        val snapshot = stationMap.mapValues { (_, v) ->
-            StationMetrics(
-                macHint     = v.macHint,
-                osHint      = v.osHint,
-                bytesIn     = v.bytesIn.get(),
-                bytesOut    = v.bytesOut.get(),
-                latencyMs   = v.latencyMs,
-                activeConns = v.connections.get()
-            )
-        }
-        _stations.value = snapshot
-        // Flush atomic byte counters to StateFlow for UI observers
+        // No per-peer snapshot is ever produced — stations stays empty.
+        // Only the aggregate interface counters are flushed to the UI.
         _totalBytesIn.value  = _totalBytesInAtomic.get()
         _totalBytesOut.value = _totalBytesOutAtomic.get()
     }
 
-    private fun deriveStationKey(addr: InetAddress): String {
-        // Use last octet of IP as non-identifying key; real production would use ARP MAC
-        return addr.hostAddress?.substringAfterLast('.') ?: addr.toString()
-    }
+    // ----- HTTP CONNECT header drain (no inspection) -----
 
-    // ----- HTTP CONNECT parsing -----
-
-    private fun readHttpConnectHeader(stream: InputStream): String? {
-        val sb = StringBuilder()
-        var prev = ' '
+    /**
+     * Consume bytes up to and including the CONNECT header terminator (\r\n\r\n)
+     * without retaining or parsing them. Returns false if the stream ended before
+     * a header was seen.
+     */
+    private fun drainHttpConnectHeader(stream: InputStream): Boolean {
+        var seen = false
+        var s0 = -1; var s1 = -1; var s2 = -1
         val buf = ByteArray(1)
         while (stream.read(buf) == 1) {
-            sb.append(buf[0].toChar())
-            if (prev == '\r' && buf[0].toInt() == '\n'.code && sb.endsWith("\r\n\r\n")) break
-            prev = buf[0].toChar()
+            seen = true
+            val c = buf[0].toInt()
+            // Slide a 4-byte window looking for CR LF CR LF; nothing is stored.
+            s0 = s1; s1 = s2; s2 = c
+            if (s0 == '\r'.code && s1 == '\n'.code && s2 == '\r'.code) {
+                // need one more \n
+                if (stream.read(buf) == 1 && buf[0].toInt() == '\n'.code) return true
+            }
         }
-        return if (sb.isNotBlank()) sb.toString() else null
-    }
-
-    private data class ConnectTarget(val host: String, val port: Int, val osHint: String)
-
-    private fun parseConnectHeader(raw: String): ConnectTarget {
-        val firstLine = raw.lines().firstOrNull() ?: return ConnectTarget("unknown", 443, "Unknown")
-        // "CONNECT host:port HTTP/1.1"
-        val parts = firstLine.split(" ")
-        val hostPort = if (parts.size >= 2) parts[1] else "unknown:443"
-        val host = hostPort.substringBefore(':')
-        val port = hostPort.substringAfter(':').toIntOrNull() ?: 443
-
-        val userAgent = raw.lines()
-            .firstOrNull { it.startsWith("User-Agent:", ignoreCase = true) }
-            ?.substringAfter(":")?.trim() ?: ""
-
-        val osHint = when {
-            userAgent.contains("Windows", ignoreCase = true) -> "Windows"
-            userAgent.contains("iPhone", ignoreCase = true) ||
-            userAgent.contains("iPad",   ignoreCase = true)  -> "iOS"
-            userAgent.contains("Mac OS", ignoreCase = true) &&
-            !userAgent.contains("iPhone", ignoreCase = true) -> "macOS"
-            userAgent.contains("Android", ignoreCase = true) -> "Android"
-            else -> "Unknown"
-        }
-        return ConnectTarget(host, port, osHint)
+        return seen
     }
 
     companion object {
         const val PROXY_PORT = 8118  // User-visible in disclosure text
-    }
-
-    // Mutable internal metrics per station
-    private class StationMetricsInternal {
-        val macHint    = ""
-        var osHint     = "Unknown"
-        val bytesIn    = java.util.concurrent.atomic.AtomicLong(0)
-        val bytesOut   = java.util.concurrent.atomic.AtomicLong(0)
-        var latencyMs  = 0L
-        val connections= AtomicInteger(0)
     }
 }

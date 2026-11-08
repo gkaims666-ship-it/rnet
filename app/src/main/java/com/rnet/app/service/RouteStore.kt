@@ -1,8 +1,6 @@
 package com.rnet.app.service
 
 import android.content.Context
-import android.util.Log
-import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -34,55 +32,28 @@ object RouteStore {
 
     // ── Public API ────────────────────────────────────────────────────────────
 
+    /**
+     * Zero-retention: routes live ONLY in memory for the current session and are
+     * gone when the engine stops or the process dies. We do not write which
+     * destinations you connected to — or which exit region served them — to disk.
+     *
+     * load() no longer reads from disk; it wipes any route history that an older
+     * build of the app may have left in SharedPreferences, so upgrading cleans up
+     * the on-disk trail as well.
+     */
     fun load(context: Context) {
         if (loaded) return
         loaded = true
         try {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val now = System.currentTimeMillis()
-            var count = 0
-            for ((key, value) in prefs.all) {
-                try {
-                    val j = JSONObject(value as String)
-                    val savedAt = j.getLong("at")
-                    if (now - savedAt < TTL_MS) {
-                        store[key] = PersistedRoute(
-                            region = j.getString("region"),
-                            port   = j.optInt("port", 0),
-                            savedAtMs = savedAt,
-                            hitCount  = j.optInt("hits", 0)
-                        )
-                        count++
-                    }
-                } catch (_: Exception) {}
-            }
-            Log.i(TAG, "Loaded $count route entries from disk")
-        } catch (e: Exception) {
-            Log.w(TAG, "RouteStore load failed: ${e.message}")
-        }
+            // Purge any previously-persisted route history from disk.
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().clear().apply()
+        } catch (_: Exception) {}
     }
 
+    /** No-op by design: route history is never written to disk (zero-retention). */
     fun save(context: Context) {
-        try {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val ed = prefs.edit()
-            val now = System.currentTimeMillis()
-            ed.clear()
-            for ((key, r) in store) {
-                if (now - r.savedAtMs < TTL_MS) {
-                    ed.putString(key, JSONObject().apply {
-                        put("region", r.region)
-                        put("port",   r.port)
-                        put("at",     r.savedAtMs)
-                        put("hits",   r.hitCount)
-                    }.toString())
-                }
-            }
-            ed.apply()
-            Log.d(TAG, "Saved ${store.size} route entries")
-        } catch (e: Exception) {
-            Log.w(TAG, "RouteStore save failed: ${e.message}")
-        }
+        // Intentionally empty — see load() / class docs.
     }
 
     fun get(key: String): PersistedRoute? {

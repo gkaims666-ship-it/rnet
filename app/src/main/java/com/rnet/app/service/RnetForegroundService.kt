@@ -802,7 +802,7 @@ class RnetForegroundService : VpnService() {
                 activeSessionCount.set(connCount.incrementAndGet())
                 pool.execute {
                     try { sess.run() }
-                    catch (e: Exception) { Log.d(TAG, "${sIP}:${sPort}→${dIP}:${dPort}: ${e.message}") }
+                    catch (e: Exception) { Log.d(TAG, "session error: ${e.message}") }
                     finally {
                         sessions.remove(key)
                         activeSessionCount.set(connCount.decrementAndGet())

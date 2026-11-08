@@ -85,7 +85,7 @@ class SmartRouter(
 
         // Circuit breaker: skip destinations that have failed too many times recently
         if (isBlacklisted(key)) {
-            Log.d(TAG, "Circuit open — skipping blacklisted $key")
+            Log.d(TAG, "Circuit open — skipping blacklisted destination")
             return null
         }
 
@@ -117,7 +117,7 @@ class SmartRouter(
                     cache[key] = entry
                     routeCacheSize = cache.size
                     lastRoutedRegion = persisted.region
-                    Log.i(TAG, "✓ $key → ${persisted.region} (from disk cache)")
+                    Log.i(TAG, "✓ route resolved from session cache → ${persisted.region}")
                     connPool.scheduleWarmup(dstIP, dstPort, key)
                     return sock
                 }
@@ -166,7 +166,7 @@ class SmartRouter(
             val updated = fe.copy(count = fe.count + 1)
             failMap.replace(key, fe, updated)
             if (updated.count >= FAIL_THRESHOLD) {
-                Log.w(TAG, "Circuit open for $key (${updated.count} failures)")
+                Log.w(TAG, "Circuit open for a destination (${updated.count} failures)")
             }
         }
     }
@@ -257,13 +257,13 @@ class SmartRouter(
             routeCacheSize = cache.size
             lastRoutedRegion = proxy
             context?.let { RouteStore.put(key, proxy, port) }
-            Log.i(TAG, "✓ $key → $region")
+            Log.i(TAG, "✓ route established → $region")
             connPool.scheduleWarmup(dstIP, dstPort, key)
             // Start background speed probe to see if a faster region exists
             if (proxy != DIRECT) scheduleSpeedProbe(dstIP, dstPort, key, proxy, port)
             return sock
         }
-        Log.w(TAG, "All routes failed for $key")
+        Log.w(TAG, "All routes failed for destination")
         return null
     }
 
@@ -307,7 +307,7 @@ class SmartRouter(
                         cache[key] = entry
                         routeCacheSize = cache.size
                         context?.let { RouteStore.put(key, bestRegion, port) }
-                        Log.i(TAG, "Speed upgrade: $key $currentRegion→$bestRegion (${bestSpeed.toInt()} B/ms)")
+                        Log.i(TAG, "Speed upgrade: $currentRegion→$bestRegion (${bestSpeed.toInt()} B/ms)")
                     }
                 }
             } catch (_: Exception) {}
