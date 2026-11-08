@@ -1047,20 +1047,40 @@ class RnetForegroundService : VpnService() {
                 sendTcp(dIP, dPort, sIP, sPort, 0, cAck, RST or ACK, null, 0); return
             }
             sock = s
+            // CRASH FIX (was RnetForegroundService.kt:1055): obtain both socket streams
+            // up front, inside a guard. The socket can be closed between connect() and
+            // first use — a duplicate SYN or a RST for the same session calls close() on
+            // it concurrently — and getInputStream()/getOutputStream() on a closed socket
+            // throws SocketException. That previously ran on a raw pool thread OUTSIDE any
+            // try/catch, so a routine TCP race crashed the entire app. Now: reset the
+            // session cleanly and return.
+            val sin: java.io.InputStream
+            val sout: java.io.OutputStream
+            try {
+                sin  = s.getInputStream()
+                sout = s.getOutputStream()
+            } catch (e: Exception) {
+                runCatching { s.close() }
+                // Only RST if this session wasn't already superseded/closed (e.g. a newer
+                // SYN for the same 4-tuple took over) — otherwise we'd tear down the
+                // client's connection that the newer session is serving.
+                if (!closed) sendTcp(dIP, dPort, sIP, sPort, 0, cAck, RST or ACK, null, 0)
+                return
+            }
             sendTcp(dIP, dPort, sIP, sPort, serverIsn, cAck, SYN or ACK, null, 0)
 
-            // Inbound: remote → tun
+            // Inbound: remote → tun. The whole task is wrapped so nothing it does can
+            // escape onto the raw pool worker and crash the process.
             pool.execute {
-                val buf = ByteArray(READ_BUF)
-                val sin = s.getInputStream()
                 try {
+                    val buf = ByteArray(READ_BUF)
                     while (!closed) {
                         val n = sin.read(buf); if (n < 0) break; if (n == 0) continue
-                        // CRITICAL FIX: segment into <= MSS chunks. A tun read can return
-                        // up to 64 KB, but the tun MTU is 1500; emitting one oversized TCP
-                        // packet makes the kernel drop it, so large responses (basically
-                        // every real page/image/video) never arrive. Split into MSS-sized
-                        // segments, each with its own correctly-advanced sequence number.
+                        // Segment into <= MSS chunks. A tun read can return up to 64 KB,
+                        // but the tun MTU is 1500; emitting one oversized TCP packet makes
+                        // the kernel drop it, so large responses (basically every real
+                        // page/image/video) never arrive. Split into MSS-sized segments,
+                        // each with its own correctly-advanced sequence number.
                         var off = 0
                         while (off < n) {
                             val seg = minOf(MSS, n - off)
@@ -1071,12 +1091,13 @@ class RnetForegroundService : VpnService() {
                         activeBytesIn.addAndGet(n.toLong())
                     }
                     if (!closed) sendTcp(dIP, dPort, sIP, sPort, sSeq, cAck, FIN or ACK, null, 0)
-                } catch (_: Exception) {}
-                finally { outQueue.offer(POISON) }
+                } catch (_: Exception) {
+                } catch (t: Throwable) {
+                    runCatching { com.rnet.app.diag.CrashHandler.record(applicationContext, "session-inbound", t) }
+                } finally { outQueue.offer(POISON) }
             }
 
             // Outbound: tun → remote
-            val sout = s.getOutputStream()
             try {
                 while (!closed) {
                     val chunk = outQueue.poll(300, TimeUnit.MILLISECONDS) ?: continue
