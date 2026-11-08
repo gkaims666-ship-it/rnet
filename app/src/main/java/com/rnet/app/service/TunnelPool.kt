@@ -152,13 +152,21 @@ class TunnelPool(
     /** Stop tunnels idle for longer than IDLE_TIMEOUT_MS. Call periodically. */
     fun evictIdle() {
         val cutoff = System.currentTimeMillis() - IDLE_TIMEOUT_MS
+        // Bug fix: same deadlock pattern as evictLru() — transport.stop() can block for
+        // several seconds (Psiphon teardown). Calling it inside removeIf's predicate holds
+        // the ConcurrentHashMap segment lock the entire time, starving all getSocksPort()
+        // callers on keys in the same segment.
+        // Fix: collect the entries to evict first, remove them from the map, then stop
+        // the transports outside any map lock.
+        val toEvict = mutableListOf<TunnelEntry>()
         tunnels.entries.removeIf { (region, entry) ->
             if (entry.lastUsedMs < cutoff) {
                 Log.i(TAG, "Evicting idle tunnel: $region")
-                runCatching { entry.transport.stop() }
+                toEvict.add(entry)
                 true
             } else false
         }
+        toEvict.forEach { runCatching { it.transport.stop() } }
     }
 
     /** True if region has a ready tunnel. */

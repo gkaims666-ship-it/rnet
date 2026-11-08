@@ -263,8 +263,15 @@ class MultipathEngine(
         val key = (sessId shl 32) or seq
         // Bug fix: use synchronized block to keep reassemblyBuf + reassemblyOrder consistent,
         // and evict oldest entry when the map grows beyond MAX_REASSEMBLY_ENTRIES to prevent OOM.
-        val shards = synchronized(reassemblyLock) {
-            reassemblyBuf.getOrPut(key) {
+        // Bug fix: shard assignment + reconstruction must be inside a single synchronized block.
+        // Multiple receiveLoop coroutines (one per path) process packets concurrently — without
+        // the lock, two threads can write to shards[] simultaneously, and the received-count
+        // check + fec.reconstruct() can race, causing double-emission or reconstruction on
+        // an incomplete array. Holding reassemblyLock for the full sequence is correct here
+        // because fec.reconstruct is fast (pure Kotlin, no I/O) and the lock is not held
+        // across any blocking call.
+        val payloadToEmit: ByteArray? = synchronized(reassemblyLock) {
+            val shards = reassemblyBuf.getOrPut(key) {
                 if (reassemblyBuf.size >= MAX_REASSEMBLY_ENTRIES) {
                     // Evict the oldest pending group to cap memory usage
                     val oldest = reassemblyOrder.pollFirst()
@@ -272,27 +279,25 @@ class MultipathEngine(
                 }
                 reassemblyOrder.addLast(key)
                 arrayOfNulls(totalShard)
-            }.also { existing ->
-                // Guard against size mismatch from duplicate/corrupt packets
-                if (existing.size != totalShard) return
             }
-        }
-        shards[shardIdx] = shardData
+            // Guard against size mismatch from duplicate/corrupt packets
+            if (shards.size != totalShard) return
+            shards[shardIdx] = shardData
 
-        // Attempt reconstruction once we have enough shards
-        val received = shards.count { it != null }
-        if (received >= FEC_DATA) {
-            if (fec.reconstruct(shards, shardLen)) {
+            // Attempt reconstruction once we have enough shards
+            val received = shards.count { it != null }
+            if (received >= FEC_DATA && fec.reconstruct(shards, shardLen)) {
                 // Reassemble data shards into original payload
                 val payload = shards.take(FEC_DATA)
                     .filterNotNull()
                     .fold(ByteArray(0)) { acc, s -> acc + s }
-                synchronized(reassemblyLock) {
-                    reassemblyBuf.remove(key)
-                    reassemblyOrder.remove(key)
-                }
-                scope.launch { _inbound.emit(payload) }
-            }
+                reassemblyBuf.remove(key)
+                reassemblyOrder.remove(key)
+                payload
+            } else null
+        }
+        if (payloadToEmit != null) {
+            scope.launch { _inbound.emit(payloadToEmit) }
         }
     }
 }
