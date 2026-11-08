@@ -126,7 +126,17 @@ class RnetForegroundService : VpnService() {
         ThreadPoolExecutor.DiscardOldestPolicy()   // drop oldest pending DNS if queue full
     )
 
-    private val svcScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Catch-all for background coroutines. A SupervisorJob alone does NOT swallow
+    // uncaught exceptions — without this handler, any failure in a svcScope coroutine
+    // (e.g. the 30s health loop) propagates to the default uncaught handler and HARD
+    // CRASHES the whole app. Here we record the stack trace to the crash log and keep
+    // the service alive instead of dying.
+    private val svcExceptionHandler = CoroutineExceptionHandler { _, e ->
+        if (e is kotlinx.coroutines.CancellationException) return@CoroutineExceptionHandler
+        Log.e(TAG, "Uncaught coroutine failure: ${e.message}", e)
+        runCatching { com.rnet.app.diag.CrashHandler.record(applicationContext, "svcScope", e) }
+    }
+    private val svcScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + svcExceptionHandler)
     private var tun: ParcelFileDescriptor? = null
 
     // Session table: Long key = packed full 32-bit src+dst IPs and ports
@@ -576,42 +586,52 @@ class RnetForegroundService : VpnService() {
         while (engineStarted) {
             delay(HEALTH_INTERVAL_MS)
             if (!engineStarted) break
-            val tp = tunnelPool ?: break
+            // Crash fix: the whole iteration is wrapped so a transient failure in
+            // any of the probes / cache ops / notification rebuild logs and is
+            // skipped — it never kills the health loop or the app.
+            try {
+                val tp = tunnelPool ?: break
 
-            // Test each active tunnel with a real SOCKS5 handshake
-            for (region in tp.activeRegions()) {
-                if (!tp.isReady(region)) continue
-                val port = tp.getSocksPort(region)
-                if (port <= 0) continue
-                // Crash fix: use use{} to guarantee socket close even on exception
-                val healthy = try {
-                    val s = Socket()
-                    protect(s)
-                    s.soTimeout = 2000
-                    s.use {
-                        it.connect(InetSocketAddress("127.0.0.1", port), 2000)
-                        it.getOutputStream().write(byteArrayOf(0x05, 0x01, 0x00))
-                        it.getOutputStream().flush()
-                        val resp = ByteArray(2)
-                        val din = java.io.DataInputStream(it.getInputStream())
-                        din.readFully(resp)   // must read exactly 2 bytes
-                        resp[0] == 0x05.toByte() && resp[1] == 0x00.toByte()
+                // Test each active tunnel with a real SOCKS5 handshake
+                for (region in tp.activeRegions()) {
+                    if (!tp.isReady(region)) continue
+                    val port = tp.getSocksPort(region)
+                    if (port <= 0) continue
+                    // Crash fix: use use{} to guarantee socket close even on exception
+                    val healthy = try {
+                        val s = Socket()
+                        protect(s)
+                        s.soTimeout = 2000
+                        s.use {
+                            it.connect(InetSocketAddress("127.0.0.1", port), 2000)
+                            it.getOutputStream().write(byteArrayOf(0x05, 0x01, 0x00))
+                            it.getOutputStream().flush()
+                            val resp = ByteArray(2)
+                            val din = java.io.DataInputStream(it.getInputStream())
+                            din.readFully(resp)   // must read exactly 2 bytes
+                            resp[0] == 0x05.toByte() && resp[1] == 0x00.toByte()
+                        }
+                    } catch (_: Exception) { false }
+
+                    if (!healthy) {
+                        Log.w(TAG, "Tunnel $region unhealthy — evicting route cache")
+                        smartRouter?.evictExpired()
                     }
-                } catch (_: Exception) { false }
-
-                if (!healthy) {
-                    Log.w(TAG, "Tunnel $region unhealthy — evicting route cache")
-                    smartRouter?.evictExpired()
                 }
-            }
 
-            // Update UI stats — don't overwrite a "Switching…" label mid-transition
-            routeCacheSize = smartRouter?.routeCacheSize ?: 0
-            pooledSockets  = smartRouter?.connPool?.totalPooled() ?: 0
-            if (!proxyLabel.startsWith("Switching")) {
-                proxyLabel = "Smart·${exitRegion} (${routeCacheSize}✓ ${pooledSockets}⚡)"
+                // Update UI stats — don't overwrite a "Switching…" label mid-transition
+                routeCacheSize = smartRouter?.routeCacheSize ?: 0
+                pooledSockets  = smartRouter?.connPool?.totalPooled() ?: 0
+                if (!proxyLabel.startsWith("Switching")) {
+                    proxyLabel = "Smart·${exitRegion} (${routeCacheSize}✓ ${pooledSockets}⚡)"
+                }
+                postNotif()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.w(TAG, "healthLoop iteration error: ${t.message}")
+                runCatching { com.rnet.app.diag.CrashHandler.record(applicationContext, "healthLoop", t) }
             }
-            postNotif()
         }
     }
 
@@ -620,17 +640,26 @@ class RnetForegroundService : VpnService() {
         var saveCounter = 0
         while (engineStarted) {
             delay(IDLE_EVICT_INTERVAL_MS)
-            tunnelPool?.evictIdle()
-            smartRouter?.evictExpired()
-            smartRouter?.connPool?.evictIdle()
-            DnsCache.evictExpired()
-            routeCacheSize = smartRouter?.routeCacheSize ?: 0
-            pooledSockets  = smartRouter?.connPool?.totalPooled() ?: 0
-            // Save caches to disk every 10 minutes
-            if (++saveCounter >= 5) {
-                saveCounter = 0
-                smartRouter?.saveTodisk()
-                DnsCache.save(applicationContext)
+            // Crash fix: wrap the iteration so an eviction/save failure logs and is
+            // skipped instead of killing the maintenance loop or the app.
+            try {
+                tunnelPool?.evictIdle()
+                smartRouter?.evictExpired()
+                smartRouter?.connPool?.evictIdle()
+                DnsCache.evictExpired()
+                routeCacheSize = smartRouter?.routeCacheSize ?: 0
+                pooledSockets  = smartRouter?.connPool?.totalPooled() ?: 0
+                // Save caches to disk every 10 minutes
+                if (++saveCounter >= 5) {
+                    saveCounter = 0
+                    smartRouter?.saveTodisk()
+                    DnsCache.save(applicationContext)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.w(TAG, "maintenanceLoop iteration error: ${t.message}")
+                runCatching { com.rnet.app.diag.CrashHandler.record(applicationContext, "maintenanceLoop", t) }
             }
         }
     }

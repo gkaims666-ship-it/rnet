@@ -33,17 +33,30 @@ object CrashHandler {
     private const val MAX_SHARE_BYTES = 128 * 1024
 
     @Volatile private var installed = false
+    @Volatile private var appVersion = "unknown"
 
     /** Install the global uncaught-exception handler. Safe to call once at startup. */
     fun install(context: Context, versionName: String) {
         if (installed) return
         installed = true
+        appVersion = versionName
         val appCtx = context.applicationContext
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            runCatching { write(appCtx, versionName, thread, throwable) }
+            runCatching { write(appCtx, thread, throwable, kind = "FATAL") }
             // Chain to the platform handler so the OS still reports/terminates as usual.
             previous?.uncaughtException(thread, throwable)
+        }
+    }
+
+    /**
+     * Record a non-fatal background failure (e.g. a coroutine that would
+     * otherwise crash the process) without terminating the app. The report is
+     * written to the same crash-logs dir so the user can still share it.
+     */
+    fun record(context: Context, label: String, throwable: Throwable) {
+        runCatching {
+            write(context.applicationContext, Thread.currentThread(), throwable, kind = "NON-FATAL:$label")
         }
     }
 
@@ -54,15 +67,16 @@ object CrashHandler {
         return d
     }
 
-    private fun write(context: Context, versionName: String, thread: Thread, t: Throwable) {
+    private fun write(context: Context, thread: Thread, t: Throwable, kind: String) {
         val d = dir(context) ?: return
-        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())
         val sw = StringWriter()
         t.printStackTrace(PrintWriter(sw))
         val report = buildString {
             append("=== RNET crash report ===\n")
+            append("kind:    ").append(kind).append('\n')
             append("time:    ").append(SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())).append('\n')
-            append("version: ").append(versionName).append('\n')
+            append("version: ").append(appVersion).append('\n')
             append("api:     ").append(Build.VERSION.SDK_INT).append('\n')
             append("thread:  ").append(thread.name).append('\n')
             append("---- stack trace ----\n")
