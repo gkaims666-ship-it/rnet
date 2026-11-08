@@ -767,7 +767,14 @@ class RnetForegroundService : VpnService() {
                     }
                     if (n <= 0) break   // EOF: tun closed, exit cleanly
                     val pkt = buf.copyOf(n)
-                    try { handlePkt(pkt, n) } catch (_: Exception) {}
+                    // Per-packet guard catches Throwable so one malformed packet (or an
+                    // Error while parsing it) is dropped — it never kills the reader
+                    // thread, which would silently stop all traffic, or crash the app.
+                    try { handlePkt(pkt, n) }
+                    catch (_: Exception) {}
+                    catch (t: Throwable) {
+                        runCatching { com.rnet.app.diag.CrashHandler.record(applicationContext, "reader", t) }
+                    }
                 }
             }, "rnet-reader")
             reader.isDaemon = true; reader.start()
@@ -830,8 +837,16 @@ class RnetForegroundService : VpnService() {
                 // Bug fix #7: use single atomic increment and copy to activeSessionCount atomically
                 activeSessionCount.set(connCount.incrementAndGet())
                 pool.execute {
+                    // Catch Throwable (not just Exception): this runs on a raw pool
+                    // worker, so an uncaught Error would reach the thread's default
+                    // handler and crash the whole app. Record it and tear the session
+                    // down cleanly instead.
                     try { sess.run() }
                     catch (e: Exception) { Log.d(TAG, "session error: ${e.message}") }
+                    catch (t: Throwable) {
+                        Log.w(TAG, "session fatal: ${t.message}")
+                        runCatching { com.rnet.app.diag.CrashHandler.record(applicationContext, "session", t) }
+                    }
                     finally {
                         sessions.remove(key)
                         activeSessionCount.set(connCount.decrementAndGet())
